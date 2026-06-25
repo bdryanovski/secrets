@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -79,6 +80,7 @@ func (db *DB) migrate() error {
 		username    TEXT NOT NULL DEFAULT '',
 		password    TEXT NOT NULL DEFAULT '',
 		notes       TEXT NOT NULL DEFAULT '',
+		meta        TEXT NOT NULL DEFAULT '',
 		created_at  DATETIME NOT NULL DEFAULT (datetime('now')),
 		updated_at  DATETIME NOT NULL DEFAULT (datetime('now'))
 	);
@@ -108,8 +110,43 @@ func (db *DB) migrate() error {
 		value TEXT NOT NULL
 	);
 	`
-	_, err := db.conn.Exec(schema)
-	return err
+	if _, err := db.conn.Exec(schema); err != nil {
+		return err
+	}
+
+	// Add meta column to existing databases that don't have it yet.
+	db.conn.Exec(`ALTER TABLE credentials ADD COLUMN meta TEXT NOT NULL DEFAULT ''`)
+
+	return nil
+}
+
+// encodeMeta serializes CredentialMeta to a JSON string for storage.
+func encodeMeta(m *models.CredentialMeta) string {
+	if m == nil {
+		return ""
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// decodeMeta deserializes a JSON string into CredentialMeta.
+func decodeMeta(s string) *models.CredentialMeta {
+	if s == "" {
+		return nil
+	}
+	var m models.CredentialMeta
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return nil
+	}
+	// Return nil if all fields are empty/zero.
+	if m.TOTP == "" && len(m.ExtraURIs) == 0 && m.Folder == "" && !m.Favorite &&
+		len(m.CustomFields) == 0 && len(m.Extra) == 0 {
+		return nil
+	}
+	return &m
 }
 
 // --- Credential CRUD ---
@@ -122,9 +159,9 @@ func (db *DB) CreateCredential(c *models.Credential) error {
 	}
 
 	result, err := db.conn.Exec(
-		`INSERT INTO credentials (name, url, username, password, notes, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		c.Name, c.URL, c.Username, encPassword, c.Notes, time.Now(), time.Now(),
+		`INSERT INTO credentials (name, url, username, password, notes, meta, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.Name, c.URL, c.Username, encPassword, c.Notes, encodeMeta(c.Meta), time.Now(), time.Now(),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert credential: %w", err)
@@ -141,11 +178,11 @@ func (db *DB) CreateCredential(c *models.Credential) error {
 // GetCredential retrieves a credential by ID. The password is decrypted.
 func (db *DB) GetCredential(id int64) (*models.Credential, error) {
 	c := &models.Credential{}
-	var encPassword string
+	var encPassword, metaStr string
 	err := db.conn.QueryRow(
-		`SELECT id, name, url, username, password, notes, created_at, updated_at
+		`SELECT id, name, url, username, password, notes, meta, created_at, updated_at
 		 FROM credentials WHERE id = ?`, id,
-	).Scan(&c.ID, &c.Name, &c.URL, &c.Username, &encPassword, &c.Notes, &c.CreatedAt, &c.UpdatedAt)
+	).Scan(&c.ID, &c.Name, &c.URL, &c.Username, &encPassword, &c.Notes, &metaStr, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get credential: %w", err)
 	}
@@ -154,13 +191,14 @@ func (db *DB) GetCredential(id int64) (*models.Credential, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt password: %w", err)
 	}
+	c.Meta = decodeMeta(metaStr)
 	return c, nil
 }
 
 // ListCredentials returns all credentials. Passwords are NOT decrypted in the list view.
 func (db *DB) ListCredentials() ([]models.Credential, error) {
 	rows, err := db.conn.Query(
-		`SELECT id, name, url, username, notes, created_at, updated_at
+		`SELECT id, name, url, username, notes, meta, created_at, updated_at
 		 FROM credentials ORDER BY name ASC`,
 	)
 	if err != nil {
@@ -171,9 +209,11 @@ func (db *DB) ListCredentials() ([]models.Credential, error) {
 	var creds []models.Credential
 	for rows.Next() {
 		var c models.Credential
-		if err := rows.Scan(&c.ID, &c.Name, &c.URL, &c.Username, &c.Notes, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		var metaStr string
+		if err := rows.Scan(&c.ID, &c.Name, &c.URL, &c.Username, &c.Notes, &metaStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
+		c.Meta = decodeMeta(metaStr)
 		creds = append(creds, c)
 	}
 	return creds, rows.Err()
@@ -187,9 +227,9 @@ func (db *DB) UpdateCredential(c *models.Credential) error {
 	}
 
 	_, err = db.conn.Exec(
-		`UPDATE credentials SET name = ?, url = ?, username = ?, password = ?, notes = ?, updated_at = ?
+		`UPDATE credentials SET name = ?, url = ?, username = ?, password = ?, notes = ?, meta = ?, updated_at = ?
 		 WHERE id = ?`,
-		c.Name, c.URL, c.Username, encPassword, c.Notes, time.Now(), c.ID,
+		c.Name, c.URL, c.Username, encPassword, c.Notes, encodeMeta(c.Meta), time.Now(), c.ID,
 	)
 	return err
 }
@@ -204,7 +244,7 @@ func (db *DB) DeleteCredential(id int64) error {
 func (db *DB) SearchCredentials(query string) ([]models.Credential, error) {
 	like := "%" + query + "%"
 	rows, err := db.conn.Query(
-		`SELECT id, name, url, username, notes, created_at, updated_at
+		`SELECT id, name, url, username, notes, meta, created_at, updated_at
 		 FROM credentials WHERE name LIKE ? OR username LIKE ? OR url LIKE ?
 		 ORDER BY name ASC`,
 		like, like, like,
@@ -217,9 +257,11 @@ func (db *DB) SearchCredentials(query string) ([]models.Credential, error) {
 	var creds []models.Credential
 	for rows.Next() {
 		var c models.Credential
-		if err := rows.Scan(&c.ID, &c.Name, &c.URL, &c.Username, &c.Notes, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		var metaStr string
+		if err := rows.Scan(&c.ID, &c.Name, &c.URL, &c.Username, &c.Notes, &metaStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
+		c.Meta = decodeMeta(metaStr)
 		creds = append(creds, c)
 	}
 	return creds, rows.Err()
@@ -395,6 +437,25 @@ func (db *DB) SearchEnvSecrets(query string) ([]models.EnvSecret, error) {
 		secrets = append(secrets, e)
 	}
 	return secrets, rows.Err()
+}
+
+// --- Purge ---
+
+// PurgeAll deletes all credentials and env secrets from the vault.
+func (db *DB) PurgeAll() error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM credentials`); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to purge credentials: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM env_secrets`); err != nil {
+		tx.Rollback()
+		return fmt.Errorf("failed to purge env secrets: %w", err)
+	}
+	return tx.Commit()
 }
 
 // --- Metadata helpers ---

@@ -229,7 +229,10 @@ func (m *CredentialListModel) renderRow(idx int, cred models.Credential, nameW, 
 	num := padRight(fmt.Sprintf("%d", idx+1), 3)
 	name := padRight(truncate(cred.Name, nameW), nameW)
 	user := padRight(truncate(cred.Username, userW), userW)
-	url := truncate(cred.URL, urlW)
+	url := padRight(truncate(cred.URL, urlW), urlW)
+
+	// Build meta indicators
+	indicators := metaIndicators(cred.Meta)
 
 	totalW := m.width
 	if totalW < 40 {
@@ -239,6 +242,9 @@ func (m *CredentialListModel) renderRow(idx int, cred models.Credential, nameW, 
 	if idx == m.cursor {
 		// Selected: full-width highlighted background
 		row := " " + styles.SelectedStyle.Render("▸") + " " + num + " " + name + " " + user + " " + url
+		if indicators != "" {
+			row += " " + indicators
+		}
 		// Pad the row to full width so the background fills the line
 		rowW := lipgloss.Width(row)
 		if rowW < totalW {
@@ -252,11 +258,41 @@ func (m *CredentialListModel) renderRow(idx int, cred models.Credential, nameW, 
 			Render(row)
 	}
 
-	return "   " +
+	row := "   " +
 		styles.MutedStyle.Render(num) + " " +
 		styles.NormalStyle.Render(name) + " " +
 		styles.DimStyle.Render(user) + " " +
 		styles.MutedStyle.Render(url)
+	if indicators != "" {
+		row += " " + indicators
+	}
+	return row
+}
+
+// metaIndicators returns small icons indicating what meta data is present.
+func metaIndicators(meta *models.CredentialMeta) string {
+	if meta == nil {
+		return ""
+	}
+	var parts []string
+	if meta.Favorite {
+		parts = append(parts, lipgloss.NewStyle().Foreground(styles.Warning).Render("*"))
+	}
+	if meta.TOTP != "" {
+		parts = append(parts, lipgloss.NewStyle().Foreground(styles.Accent).Render("T"))
+	}
+	if meta.Folder != "" {
+		parts = append(parts, lipgloss.NewStyle().Foreground(styles.Muted).Render(meta.Folder))
+	}
+	if len(meta.CustomFields) > 0 {
+		parts = append(parts, lipgloss.NewStyle().Foreground(styles.Muted).Render(
+			fmt.Sprintf("+%d", len(meta.CustomFields)),
+		))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " ")
 }
 
 // padRight pads s with spaces to exactly width visual columns.

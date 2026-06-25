@@ -64,6 +64,11 @@ func (a *AppleImporter) Import(filePath string) (*ImportResult, error) {
 			c.Name = c.URL
 		}
 
+		// Capture OTPAuth/TOTP if present.
+		if totp := getCol(row, colMap, "otpauth"); totp != "" {
+			c.Meta = &models.CredentialMeta{TOTP: totp}
+		}
+
 		result.Credentials = append(result.Credentials, c)
 	}
 

@@ -77,6 +77,51 @@ func (b *BitwardenImporter) importCSV(filePath string) (*ImportResult, error) {
 			c.Name = c.URL
 		}
 
+		// Collect meta fields from CSV.
+		meta := &models.CredentialMeta{}
+		hasMeta := false
+
+		if folder := getCol(row, colMap, "folder"); folder != "" {
+			meta.Folder = folder
+			hasMeta = true
+		}
+
+		if fav := getCol(row, colMap, "favorite"); fav == "1" || strings.EqualFold(fav, "true") {
+			meta.Favorite = true
+			hasMeta = true
+		}
+
+		if totp := getCol(row, colMap, "login_totp"); totp != "" {
+			meta.TOTP = totp
+			hasMeta = true
+		}
+
+		// Bitwarden CSV stores custom fields as "name: value" pairs separated by newlines.
+		if fields := getCol(row, colMap, "fields"); fields != "" {
+			for _, line := range strings.Split(fields, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				parts := strings.SplitN(line, ": ", 2)
+				name := parts[0]
+				value := ""
+				if len(parts) == 2 {
+					value = parts[1]
+				}
+				meta.CustomFields = append(meta.CustomFields, models.CustomField{
+					Name:  name,
+					Value: value,
+					Type:  0, // CSV doesn't indicate field type
+				})
+				hasMeta = true
+			}
+		}
+
+		if hasMeta {
+			c.Meta = meta
+		}
+
 		result.Credentials = append(result.Credentials, c)
 	}
 
@@ -85,23 +130,40 @@ func (b *BitwardenImporter) importCSV(filePath string) (*ImportResult, error) {
 
 // bitwardenJSON represents the top-level Bitwarden JSON export structure.
 type bitwardenJSON struct {
-	Items []bitwardenItem `json:"items"`
+	Folders []bitwardenFolder `json:"folders"`
+	Items   []bitwardenItem   `json:"items"`
 }
 
 type bitwardenItem struct {
-	Name  string          `json:"name"`
-	Notes string          `json:"notes"`
-	Login *bitwardenLogin `json:"login"`
+	Name     string           `json:"name"`
+	Notes    string           `json:"notes"`
+	Type     int              `json:"type"`
+	Favorite bool             `json:"favorite"`
+	FolderID *string          `json:"folderId"`
+	Login    *bitwardenLogin  `json:"login"`
+	Fields   []bitwardenField `json:"fields"`
 }
 
 type bitwardenLogin struct {
 	Username string         `json:"username"`
 	Password string         `json:"password"`
+	TOTP     string         `json:"totp"`
 	URIs     []bitwardenURI `json:"uris"`
 }
 
 type bitwardenURI struct {
 	URI string `json:"uri"`
+}
+
+type bitwardenField struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	Type  int    `json:"type"` // 0=text, 1=hidden, 2=boolean
+}
+
+type bitwardenFolder struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 func (b *BitwardenImporter) importJSON(filePath string) (*ImportResult, error) {
@@ -113,6 +175,12 @@ func (b *BitwardenImporter) importJSON(filePath string) (*ImportResult, error) {
 	var export bitwardenJSON
 	if err := json.Unmarshal(data, &export); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON: %w", err)
+	}
+
+	// Build folder ID -> name lookup.
+	folderMap := make(map[string]string)
+	for _, f := range export.Folders {
+		folderMap[f.ID] = f.Name
 	}
 
 	result := &ImportResult{}
@@ -135,6 +203,56 @@ func (b *BitwardenImporter) importJSON(filePath string) (*ImportResult, error) {
 			Username: item.Login.Username,
 			Password: item.Login.Password,
 			Notes:    item.Notes,
+		}
+
+		// Collect meta fields.
+		meta := &models.CredentialMeta{}
+		hasMeta := false
+
+		// TOTP seed
+		if item.Login.TOTP != "" {
+			meta.TOTP = item.Login.TOTP
+			hasMeta = true
+		}
+
+		// Extra URIs beyond the first
+		if len(item.Login.URIs) > 1 {
+			for _, u := range item.Login.URIs[1:] {
+				if u.URI != "" {
+					meta.ExtraURIs = append(meta.ExtraURIs, u.URI)
+				}
+			}
+			if len(meta.ExtraURIs) > 0 {
+				hasMeta = true
+			}
+		}
+
+		// Folder name
+		if item.FolderID != nil && *item.FolderID != "" {
+			if name, ok := folderMap[*item.FolderID]; ok {
+				meta.Folder = name
+				hasMeta = true
+			}
+		}
+
+		// Favorite flag
+		if item.Favorite {
+			meta.Favorite = true
+			hasMeta = true
+		}
+
+		// Custom fields
+		for _, f := range item.Fields {
+			meta.CustomFields = append(meta.CustomFields, models.CustomField{
+				Name:  f.Name,
+				Value: f.Value,
+				Type:  f.Type,
+			})
+			hasMeta = true
+		}
+
+		if hasMeta {
+			c.Meta = meta
 		}
 
 		result.Credentials = append(result.Credentials, c)

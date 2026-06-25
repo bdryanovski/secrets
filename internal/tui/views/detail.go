@@ -34,6 +34,7 @@ type DetailModel struct {
 	username string
 	password string
 	notes    string
+	meta     *models.CredentialMeta
 	env      string
 	key      string
 	value    string
@@ -97,6 +98,7 @@ func (m *DetailModel) update(msg tea.Msg) tea.Cmd {
 		m.username = msg.cred.Username
 		m.password = msg.cred.Password
 		m.notes = msg.cred.Notes
+		m.meta = msg.cred.Meta
 	case envDetailMsg:
 		m.key = msg.env.Key
 		m.value = msg.env.Value
@@ -180,6 +182,43 @@ func (m *DetailModel) renderCredentialCard() string {
 	if m.notes != "" {
 		rows = append(rows, "")
 		rows = append(rows, m.detailRow("Notes", m.notes, styles.TextDim))
+	}
+
+	// Meta fields
+	if m.meta != nil {
+		rows = append(rows, "")
+		rows = append(rows, "  "+styles.DividerStyle.Render(strings.Repeat("─", 40)))
+
+		if m.meta.TOTP != "" {
+			rows = append(rows, m.detailRow("TOTP", m.meta.TOTP, styles.Accent))
+		}
+
+		if m.meta.Folder != "" {
+			rows = append(rows, m.detailRow("Folder", m.meta.Folder, styles.TextDim))
+		}
+
+		if m.meta.Favorite {
+			rows = append(rows, m.detailRow("Favorite", "Yes", styles.Warning))
+		}
+
+		if len(m.meta.ExtraURIs) > 0 {
+			for i, uri := range m.meta.ExtraURIs {
+				label := fmt.Sprintf("URI %d", i+2)
+				rows = append(rows, m.detailRow(label, uri, styles.Accent))
+			}
+		}
+
+		if len(m.meta.CustomFields) > 0 {
+			rows = append(rows, "")
+			rows = append(rows, "  "+styles.MutedStyle.Render("Custom Fields"))
+			for _, f := range m.meta.CustomFields {
+				val := f.Value
+				if f.Type == 1 && !m.showPassword {
+					val = strings.Repeat("●", 8)
+				}
+				rows = append(rows, m.detailRow(f.Name, val, styles.Text))
+			}
+		}
 	}
 
 	header := "  " + styles.TitleStyle.Render("Credential Details")
