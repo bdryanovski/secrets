@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/bdryanovski/secrets/internal/config"
 	"github.com/bdryanovski/secrets/internal/database"
@@ -88,16 +87,8 @@ type errMsg struct {
 	err string
 }
 
-// splashDoneMsg signals the splash screen is done.
-type splashDoneMsg struct{}
-
 func (m *UnlockModel) Init() tea.Cmd {
-	return tea.Batch(
-		tea.Tick(1500*time.Millisecond, func(time.Time) tea.Msg {
-			return splashDoneMsg{}
-		}),
-		m.spinner.Tick,
-	)
+	return m.spinner.Tick
 }
 
 func (m *UnlockModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -106,10 +97,6 @@ func (m *UnlockModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
-
-	case splashDoneMsg:
-		m.phase = phaseInput
-		return m, textinput.Blink
 
 	case tea.KeyMsg:
 		if m.phase == phaseSplash {
