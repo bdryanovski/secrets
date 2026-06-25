@@ -1,5 +1,5 @@
-# Binaries
-secrets
+# Binaries (only the compiled binary at repo root, not cmd/secrets/ directory)
+/secrets
 *.exe
 *.exe~
 *.dll
