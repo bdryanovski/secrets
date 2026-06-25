@@ -1,0 +1,147 @@
+name: Build and Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main, master]
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      next_rc: ${{ steps.version.outputs.next_rc }}
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Compute version
+        id: version
+        run: |
+          YEAR=$(date -u '+%Y')
+          MONTH=$(date -u '+%-m')
+          COMMIT=$(git rev-parse --short HEAD)
+
+          RC_FILE=".rc"
+          if [ -f "$RC_FILE" ]; then
+            RC=$(cat "$RC_FILE" | tr -d '[:space:]')
+          else
+            RC=0
+          fi
+
+          VERSION="${YEAR}.${MONTH}.${RC}-rc${COMMIT}"
+          NEXT_RC=$((RC + 1))
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "next_rc=${NEXT_RC}" >> "$GITHUB_OUTPUT"
+          echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION}"
+
+  build:
+    needs: version
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            artifact: secrets-linux-amd64
+          - os: macos-13
+            goos: darwin
+            goarch: amd64
+            artifact: secrets-darwin-amd64
+          - os: macos-14
+            goos: darwin
+            goarch: arm64
+            artifact: secrets-darwin-arm64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Install SQLCipher (Linux)
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsqlcipher-dev
+
+      - name: Install SQLCipher (macOS)
+        if: matrix.goos == 'darwin'
+        run: |
+          brew install sqlcipher
+
+      - name: Build
+        env:
+          CGO_ENABLED: 1
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          VERSION_PKG="github.com/bdryanovski/secrets/internal/version"
+          LDFLAGS="-X ${VERSION_PKG}.Version=${{ needs.version.outputs.version }} \
+                   -X ${VERSION_PKG}.GitCommit=${{ needs.version.outputs.commit }} \
+                   -X ${VERSION_PKG}.BuildDate=$(date -u '+%Y-%m-%d_%H:%M:%S')"
+          go build -ldflags "${LDFLAGS}" -o ${{ matrix.artifact }} ./cmd/secrets
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: bin/
+
+      - name: Bump RC number
+        run: |
+          echo "${{ needs.version.outputs.next_rc }}" > .rc
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .rc
+          git commit -m "ci: bump RC to ${{ needs.version.outputs.next_rc }}"
+          git push
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: Release ${{ needs.version.outputs.version }}
+          body: |
+            Automated release from merged PR #${{ github.event.pull_request.number }}
+
+            **Version:** `${{ needs.version.outputs.version }}`
+            **Commit:** `${{ needs.version.outputs.commit }}`
+
+            ## Downloads
+            | Platform | Architecture | File |
+            |----------|-------------|------|
+            | Linux    | amd64       | `secrets-linux-amd64` |
+            | macOS    | amd64       | `secrets-darwin-amd64` |
+            | macOS    | arm64 (Apple Silicon) | `secrets-darwin-arm64` |
+          files: |
+            bin/secrets-linux-amd64/secrets-linux-amd64
+            bin/secrets-darwin-amd64/secrets-darwin-amd64
+            bin/secrets-darwin-arm64/secrets-darwin-arm64
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
