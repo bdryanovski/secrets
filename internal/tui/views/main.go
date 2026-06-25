@@ -57,15 +57,19 @@ type MainModel struct {
 }
 
 // NewMainModel creates the main application model.
-func NewMainModel(cfg *config.Config, db *database.DB) *MainModel {
+func NewMainModel(cfg *config.Config, db *database.DB, width, height int) *MainModel {
 	m := &MainModel{
 		cfg:       cfg,
 		db:        db,
+		width:     width,
+		height:    height,
 		activeTab: TabCredentials,
 		viewMode:  ViewList,
 	}
 	m.credList = NewCredentialListModel(db)
 	m.envList = NewEnvSecretListModel(db)
+	// List sub-views are sized dynamically in View() based on
+	// measured chrome height.
 	return m
 }
 
@@ -81,6 +85,8 @@ func (m *MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		// List sub-views are sized dynamically in View() based on
+		// measured chrome height, so no SetSize call needed here.
 		return m, nil
 
 	case statusMsg:
@@ -383,26 +389,47 @@ func (m *MainModel) View() string {
 		contentWidth = 100
 	}
 
-	var sections []string
+	// Render chrome sections first so we can measure their height.
+	header := m.renderHeader(contentWidth)
+	chromeHeight := lipgloss.Height(header)
 
-	// Header
-	sections = append(sections, m.renderHeader(contentWidth))
-
-	// Tabs (only in list view or when relevant)
+	var tabs string
 	if m.viewMode == ViewList || m.viewMode == ViewDelete {
-		sections = append(sections, m.renderTabs(contentWidth))
+		tabs = m.renderTabs(contentWidth)
+		chromeHeight += lipgloss.Height(tabs)
 	}
 
-	// Content
-	sections = append(sections, m.renderContent(contentWidth))
+	footer := m.renderFooter()
+	chromeHeight += lipgloss.Height(footer)
 
-	// Status bar
+	var status string
 	if m.statusMsg != "" {
-		sections = append(sections, m.renderStatus(contentWidth))
+		status = m.renderStatus(contentWidth)
+		chromeHeight += lipgloss.Height(status)
 	}
 
-	// Help footer
-	sections = append(sections, m.renderFooter())
+	// Give list sub-views exactly the remaining vertical space.
+	listHeight := m.height - chromeHeight
+	if listHeight < 3 {
+		listHeight = 3
+	}
+	m.credList.SetSize(contentWidth, listHeight)
+	m.envList.SetSize(contentWidth, listHeight)
+
+	// Now render content with the correct size.
+	content := m.renderContent(contentWidth)
+
+	// Assemble all sections.
+	var sections []string
+	sections = append(sections, header)
+	if tabs != "" {
+		sections = append(sections, tabs)
+	}
+	sections = append(sections, content)
+	if status != "" {
+		sections = append(sections, status)
+	}
+	sections = append(sections, footer)
 
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
@@ -505,9 +532,10 @@ func (m *MainModel) renderStatus(width int) string {
 }
 
 func (m *MainModel) renderFooter() string {
+	w := m.width
 	switch m.viewMode {
 	case ViewList:
-		return styles.HelpBar(
+		return styles.HelpBarWrapped(w,
 			styles.KeyHint("tab", "switch"),
 			styles.KeyHint("a", "add"),
 			styles.KeyHint("enter", "view"),
@@ -518,26 +546,26 @@ func (m *MainModel) renderFooter() string {
 			styles.KeyHint("q", "quit"),
 		)
 	case ViewDetail:
-		return styles.HelpBar(
+		return styles.HelpBarWrapped(w,
 			styles.KeyHint("s", "show/hide"),
 			styles.KeyHint("c", "copy"),
 			styles.KeyHint("e", "edit"),
 			styles.KeyHint("esc", "back"),
 		)
 	case ViewAdd, ViewEdit:
-		return styles.HelpBar(
+		return styles.HelpBarWrapped(w,
 			styles.KeyHint("tab", "next field"),
 			styles.KeyHint("shift+tab", "prev"),
 			styles.KeyHint("ctrl+s", "save"),
 			styles.KeyHint("esc", "cancel"),
 		)
 	case ViewDelete:
-		return styles.HelpBar(
+		return styles.HelpBarWrapped(w,
 			styles.KeyHint("y", "confirm"),
 			styles.KeyHint("n", "cancel"),
 		)
 	case ViewGeneratePassword:
-		return styles.HelpBar(
+		return styles.HelpBarWrapped(w,
 			styles.KeyHint("r", "regenerate"),
 			styles.KeyHint("c", "copy"),
 			styles.KeyHint("+/-", "length"),
@@ -548,18 +576,18 @@ func (m *MainModel) renderFooter() string {
 			styles.KeyHint("esc", "back"),
 		)
 	case ViewSearch:
-		return styles.HelpBar(
+		return styles.HelpBarWrapped(w,
 			styles.KeyHint("enter", "search"),
 			styles.KeyHint("esc", "back"),
 		)
 	case ViewImport:
-		return styles.HelpBar(
+		return styles.HelpBarWrapped(w,
 			styles.KeyHint("1/2", "source"),
 			styles.KeyHint("enter", "import"),
 			styles.KeyHint("esc", "back"),
 		)
 	default:
-		return styles.HelpBar(styles.KeyHint("esc", "back"))
+		return styles.HelpBarWrapped(w, styles.KeyHint("esc", "back"))
 	}
 }
 

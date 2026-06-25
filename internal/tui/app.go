@@ -21,7 +21,7 @@ func Run(cfg *config.Config) error {
 
 // RunWithDB starts the TUI application with an already-opened database.
 func RunWithDB(cfg *config.Config, db *database.DB) error {
-	m := views.NewMainModel(cfg, db)
+	m := views.NewMainModel(cfg, db, 0, 0)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err := p.Run()
 	return err

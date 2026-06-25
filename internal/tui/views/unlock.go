@@ -115,7 +115,7 @@ func (m *UnlockModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case dbOpenedMsg:
-		main := NewMainModel(m.cfg, msg.db)
+		main := NewMainModel(m.cfg, msg.db, m.width, m.height)
 		return main, main.Init()
 
 	case errMsg:

@@ -17,13 +17,47 @@ type EnvSecretListModel struct {
 	db     *database.DB
 	items  []models.EnvSecret
 	cursor int
+	offset int // first visible row index
 	err    string
 	filter string
+	width  int
+	height int // available rows for the list content
 }
 
 // NewEnvSecretListModel creates a new env secret list view.
 func NewEnvSecretListModel(db *database.DB) *EnvSecretListModel {
 	return &EnvSecretListModel{db: db}
+}
+
+// SetSize updates the available dimensions for the list.
+func (m *EnvSecretListModel) SetSize(w, h int) {
+	m.width = w
+	m.height = h
+}
+
+// visibleRows returns how many data rows fit in the available height.
+// Conservative estimate for keyboard navigation (before View renders).
+func (m *EnvSecretListModel) visibleRows() int {
+	// pills(1) + badge(1) + header(1) + divider(1) + scroll indicators(2) + padding(2) = 8
+	rows := m.height - 8
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
+}
+
+// ensureCursorVisible adjusts the scroll offset so the cursor is always in view.
+func (m *EnvSecretListModel) ensureCursorVisible() {
+	visible := m.visibleRows()
+	if m.cursor < m.offset {
+		m.offset = m.cursor
+	}
+	if m.cursor >= m.offset+visible {
+		m.offset = m.cursor - visible + 1
+	}
+	if m.offset < 0 {
+		m.offset = 0
+	}
 }
 
 type envSecretsLoadedMsg struct {
@@ -51,6 +85,7 @@ func (m *EnvSecretListModel) update(msg tea.Msg) tea.Cmd {
 			if m.cursor >= len(m.items) {
 				m.cursor = max(0, len(m.items)-1)
 			}
+			m.ensureCursorVisible()
 		}
 	}
 	return nil
@@ -72,19 +107,43 @@ func (m *EnvSecretListModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		if len(m.items) > 0 {
 			m.cursor = len(m.items) - 1
 		}
+	case "pgup":
+		visible := m.visibleRows()
+		m.cursor -= visible
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+	case "pgdown":
+		visible := m.visibleRows()
+		m.cursor += visible
+		if m.cursor >= len(m.items) {
+			m.cursor = len(m.items) - 1
+		}
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
 	case "1":
 		m.filter = "development"
+		m.cursor = 0
+		m.offset = 0
 		return m.loadEnvSecrets()
 	case "2":
 		m.filter = "staging"
+		m.cursor = 0
+		m.offset = 0
 		return m.loadEnvSecrets()
 	case "3":
 		m.filter = "production"
+		m.cursor = 0
+		m.offset = 0
 		return m.loadEnvSecrets()
 	case "0":
 		m.filter = ""
+		m.cursor = 0
+		m.offset = 0
 		return m.loadEnvSecrets()
 	}
+	m.ensureCursorVisible()
 	return nil
 }
 
@@ -97,11 +156,9 @@ func (m *EnvSecretListModel) Selected() *models.EnvSecret {
 }
 
 func (m *EnvSecretListModel) View() string {
-	var b strings.Builder
-
-	// Environment filter pills
-	b.WriteString("\n")
-	b.WriteString("  ")
+	// Environment filter pills (always shown)
+	var pills strings.Builder
+	pills.WriteString("  ")
 	filters := []struct {
 		key, label, value string
 	}{
@@ -112,76 +169,145 @@ func (m *EnvSecretListModel) View() string {
 	}
 	for i, f := range filters {
 		if i > 0 {
-			b.WriteString(" ")
+			pills.WriteString(" ")
 		}
 		label := f.label + " (" + f.key + ")"
 		if m.filter == f.value {
-			b.WriteString(styles.Badge(" "+label+" ", styles.BgDark, styles.Primary))
+			pills.WriteString(styles.Badge(" "+label+" ", styles.BgDark, styles.Primary))
 		} else {
-			b.WriteString(styles.Badge(" "+label+" ", styles.TextDim, styles.BgCard))
+			pills.WriteString(styles.Badge(" "+label+" ", styles.TextDim, styles.BgCard))
 		}
 	}
-	b.WriteString("\n")
+	pillsStr := pills.String()
 
 	if m.err != "" {
-		b.WriteString("\n")
-		b.WriteString(styles.DangerCardStyle.Render(
-			styles.DangerStyle.Render("  Error: " + m.err),
-		))
-		b.WriteString("\n")
-		return b.String()
+		return pillsStr + "\n\n" + styles.DangerCardStyle.Render(
+			styles.DangerStyle.Render("  Error: "+m.err),
+		) + "\n"
 	}
 
 	if len(m.items) == 0 {
-		b.WriteString(m.emptyState())
-		return b.String()
+		// Pills take 1 line + newline = 2 lines of overhead
+		pillsHeight := lipgloss.Height(pillsStr) + 1
+		emptyHeight := m.height - pillsHeight
+		if emptyHeight < 3 {
+			emptyHeight = 3
+		}
+		return pillsStr + "\n" + m.emptyStateWithHeight(emptyHeight)
 	}
 
-	// Count badge
+	// Determine column widths based on available width
+	rowWidth := m.width - 4
+	if rowWidth < 40 {
+		rowWidth = 40
+	}
+	keyW := rowWidth * 38 / 100
+	descW := rowWidth * 25 / 100
+	if keyW < 10 {
+		keyW = 10
+	}
+	if descW < 8 {
+		descW = 8
+	}
+
+	// Build top chrome so we can measure it.
 	countBadge := styles.Badge(
 		fmt.Sprintf(" %d items ", len(m.items)),
 		styles.BgDark, styles.PrimaryDim,
 	)
-	b.WriteString("\n  " + countBadge + "\n\n")
 
-	// Table header
-	header := fmt.Sprintf("  %-3s %-30s %-12s %s", "#", "KEY", "ENV", "DESCRIPTION")
-	b.WriteString(styles.MutedStyle.Render(header))
-	b.WriteString("\n")
-	b.WriteString("  " + styles.Divider(70))
+	//  "   " + num(3) + " " + key(keyW) + " " + env(8) + " " + desc
+	headerLeft := "   " + padRight("#", 3) + " " + padRight("KEY", keyW) + " " + padRight("ENV", 8) + " " + "DESCRIPTION"
+	headerLeftW := lipgloss.Width(headerLeft)
+	badgeW := lipgloss.Width(countBadge)
+	gap := m.width - headerLeftW - badgeW
+	if gap < 1 {
+		gap = 1
+	}
+	header := styles.MutedStyle.Render(headerLeft) + strings.Repeat(" ", gap) + countBadge
+
+	dividerW := min(keyW+descW+20, rowWidth)
+
+	var top strings.Builder
+	top.WriteString(pillsStr + "\n")
+	top.WriteString(header + "\n")
+	top.WriteString("  " + styles.Divider(dividerW))
+	topStr := top.String()
+
+	// Measure chrome height: top chrome + 1 scroll-up + 1 scroll-down.
+	chromeLines := lipgloss.Height(topStr) + 2
+
+	// Compute how many data rows fit.
+	visible := m.height - chromeLines
+	if visible < 1 {
+		visible = 1
+	}
+
+	m.ensureCursorVisible()
+
+	end := m.offset + visible
+	if end > len(m.items) {
+		end = len(m.items)
+	}
+
+	// Assemble the output.
+	var b strings.Builder
+	b.WriteString(topStr + "\n")
+
+	// Scroll-up indicator
+	if m.offset > 0 {
+		b.WriteString(styles.MutedStyle.Render(fmt.Sprintf("  ▲ %d more above", m.offset)))
+	}
 	b.WriteString("\n")
 
-	// Rows
-	for i, env := range m.items {
-		b.WriteString(m.renderRow(i, env))
-		b.WriteString("\n")
+	for i := m.offset; i < end; i++ {
+		b.WriteString(m.renderRow(i, m.items[i], keyW, descW) + "\n")
+	}
+
+	// Scroll-down indicator
+	remaining := len(m.items) - end
+	if remaining > 0 {
+		b.WriteString(styles.MutedStyle.Render(fmt.Sprintf("  ▼ %d more below", remaining)))
 	}
 
 	return b.String()
 }
 
-func (m *EnvSecretListModel) renderRow(idx int, env models.EnvSecret) string {
-	key := truncate(env.Key, 28)
-	desc := truncate(env.Description, 20)
+func (m *EnvSecretListModel) renderRow(idx int, env models.EnvSecret, keyW, descW int) string {
+	num := padRight(fmt.Sprintf("%d", idx+1), 3)
+	key := padRight(truncate(env.Key, keyW), keyW)
 	badge := styles.EnvBadge(env.Environment)
-	num := fmt.Sprintf("%-3d", idx+1)
+	badgePadded := padRight(badge, 8) // badges are max ~6 visual chars, pad to 8
+	desc := truncate(env.Description, descW)
 
-	if idx == m.cursor {
-		row := fmt.Sprintf("%-3s %-30s %s  %s", num, key, badge, desc)
-		return styles.SelectedRowStyle.Render(
-			styles.SelectedStyle.Render("> ") + row,
-		)
+	totalW := m.width
+	if totalW < 40 {
+		totalW = 40
 	}
 
-	return fmt.Sprintf("  %s %-30s %s  %s",
-		styles.MutedStyle.Render(num),
-		styles.NormalStyle.Render(key),
-		badge,
-		styles.MutedStyle.Render(desc),
-	)
+	if idx == m.cursor {
+		// Selected: full-width highlighted background
+		row := " " + styles.SelectedStyle.Render("▸") + " " + num + " " + key + " " + badgePadded + " " + desc
+		rowW := lipgloss.Width(row)
+		if rowW < totalW {
+			row += strings.Repeat(" ", totalW-rowW)
+		}
+		return lipgloss.NewStyle().
+			Foreground(styles.Text).
+			Background(styles.BgSurface).
+			Bold(true).
+			MaxWidth(totalW).
+			Render(row)
+	}
+
+	return "   " +
+		styles.MutedStyle.Render(num) + " " +
+		styles.NormalStyle.Render(key) + " " +
+		badgePadded + " " +
+		styles.MutedStyle.Render(desc)
 }
 
-func (m *EnvSecretListModel) emptyState() string {
+func (m *EnvSecretListModel) emptyStateWithHeight(h int) string {
 	art := lipgloss.NewStyle().Foreground(styles.Subtle).Render(`
       _____
      |     |
@@ -198,5 +324,5 @@ func (m *EnvSecretListModel) emptyState() string {
 		styles.DimStyle.Render("Press ")+styles.KeyStyle.Render("a")+styles.DimStyle.Render(" to add your first env secret"),
 		styles.DimStyle.Render("Secrets can have different values per environment"),
 	)
-	return "\n" + content + "\n"
+	return lipgloss.Place(m.width, h, lipgloss.Center, lipgloss.Center, content)
 }
