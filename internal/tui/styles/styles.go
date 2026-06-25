@@ -214,9 +214,50 @@ func KeyHint(key, desc string) string {
 	return KeyStyle.Render(key) + " " + KeyDescStyle.Render(desc)
 }
 
-// HelpBar renders a row of key hints separated by dots.
+// HelpBar renders key hints separated by dots, wrapping to multiple lines if needed.
 func HelpBar(hints ...string) string {
-	return FooterBarStyle.Render("  " + strings.Join(hints, "  "+MutedStyle.Render("·")+"  "))
+	sep := "  " + MutedStyle.Render("·") + "  "
+	return FooterBarStyle.Render("  " + strings.Join(hints, sep))
+}
+
+// HelpBarWrapped renders key hints that wrap into multiple lines at the given width.
+func HelpBarWrapped(width int, hints ...string) string {
+	if width <= 0 {
+		return HelpBar(hints...)
+	}
+	sep := "  " + MutedStyle.Render("·") + "  "
+	sepW := 5 // visual width of " · " with spaces
+
+	var lines []string
+	var line string
+	lineW := 2 // start with "  " indent
+
+	for i, h := range hints {
+		hW := lipgloss.Width(h)
+		needSep := i > 0 && line != ""
+		addW := hW
+		if needSep {
+			addW += sepW
+		}
+
+		if line != "" && lineW+addW > width {
+			// Wrap to next line
+			lines = append(lines, "  "+line)
+			line = h
+			lineW = 2 + hW
+		} else {
+			if needSep {
+				line += sep
+			}
+			line += h
+			lineW += addW
+		}
+	}
+	if line != "" {
+		lines = append(lines, "  "+line)
+	}
+
+	return FooterBarStyle.Render(strings.Join(lines, "\n"))
 }
 
 // Badge renders a small colored pill with text.
