@@ -42,25 +42,9 @@ jobs:
           echo "commit=${COMMIT}" >> "$GITHUB_OUTPUT"
           echo "Version: ${VERSION}"
 
-  build:
+  build-linux:
     needs: version
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            goos: linux
-            goarch: amd64
-            artifact: secrets-linux-amd64
-          - os: macos-13
-            goos: darwin
-            goarch: amd64
-            artifact: secrets-darwin-amd64
-          - os: macos-14
-            goos: darwin
-            goarch: arm64
-            artifact: secrets-darwin-arm64
-    runs-on: ${{ matrix.os }}
-
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -70,37 +54,80 @@ jobs:
         with:
           go-version: '1.23'
 
-      - name: Install SQLCipher (Linux)
-        if: matrix.goos == 'linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsqlcipher-dev
-
-      - name: Install SQLCipher (macOS)
-        if: matrix.goos == 'darwin'
-        run: |
-          brew install sqlcipher
-
       - name: Build
         env:
           CGO_ENABLED: 1
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
         run: |
           VERSION_PKG="github.com/bdryanovski/secrets/internal/version"
           LDFLAGS="-X ${VERSION_PKG}.Version=${{ needs.version.outputs.version }} \
                    -X ${VERSION_PKG}.GitCommit=${{ needs.version.outputs.commit }} \
                    -X ${VERSION_PKG}.BuildDate=$(date -u '+%Y-%m-%d_%H:%M:%S')"
-          go build -ldflags "${LDFLAGS}" -o ${{ matrix.artifact }} ./cmd/secrets
+          go build -ldflags "${LDFLAGS}" -o secrets-linux-amd64 ./cmd/secrets
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          name: secrets-linux-amd64
+          path: secrets-linux-amd64
+
+  build-darwin-amd64:
+    needs: version
+    runs-on: macos-13
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build
+        env:
+          CGO_ENABLED: 1
+        run: |
+          VERSION_PKG="github.com/bdryanovski/secrets/internal/version"
+          LDFLAGS="-X ${VERSION_PKG}.Version=${{ needs.version.outputs.version }} \
+                   -X ${VERSION_PKG}.GitCommit=${{ needs.version.outputs.commit }} \
+                   -X ${VERSION_PKG}.BuildDate=$(date -u '+%Y-%m-%d_%H:%M:%S')"
+          go build -ldflags "${LDFLAGS}" -o secrets-darwin-amd64 ./cmd/secrets
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: secrets-darwin-amd64
+          path: secrets-darwin-amd64
+
+  build-darwin-arm64:
+    needs: version
+    runs-on: macos-14
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build
+        env:
+          CGO_ENABLED: 1
+        run: |
+          VERSION_PKG="github.com/bdryanovski/secrets/internal/version"
+          LDFLAGS="-X ${VERSION_PKG}.Version=${{ needs.version.outputs.version }} \
+                   -X ${VERSION_PKG}.GitCommit=${{ needs.version.outputs.commit }} \
+                   -X ${VERSION_PKG}.BuildDate=$(date -u '+%Y-%m-%d_%H:%M:%S')"
+          go build -ldflags "${LDFLAGS}" -o secrets-darwin-arm64 ./cmd/secrets
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: secrets-darwin-arm64
+          path: secrets-darwin-arm64
 
   release:
-    needs: [version, build]
+    needs: [version, build-linux, build-darwin-amd64, build-darwin-arm64]
     runs-on: ubuntu-latest
 
     steps:
