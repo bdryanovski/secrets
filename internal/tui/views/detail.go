@@ -11,6 +11,7 @@ import (
 	"github.com/bdryanovski/secrets/internal/tui/styles"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // DetailType identifies what kind of item is being shown.
@@ -110,7 +111,6 @@ func (m *DetailModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case "s":
 		m.showPassword = !m.showPassword
 	case "c":
-		// Copy password/value to clipboard with timeout.
 		secret := m.password
 		if m.detailType == DetailEnvSecret {
 			secret = m.value
@@ -128,66 +128,114 @@ func (m *DetailModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *DetailModel) View() string {
-	var b strings.Builder
-
 	if m.err != "" {
-		b.WriteString(styles.DangerStyle.Render("  Error: " + m.err))
-		b.WriteString("\n")
-		return b.String()
+		return "\n" + styles.DangerCardStyle.Render(
+			styles.DangerStyle.Render("  Error: "+m.err),
+		)
 	}
+
+	var b strings.Builder
+	b.WriteString("\n")
 
 	if m.detailType == DetailCredential {
-		b.WriteString(m.renderCredential())
+		b.WriteString(m.renderCredentialCard())
 	} else {
-		b.WriteString(m.renderEnvSecret())
+		b.WriteString(m.renderEnvSecretCard())
 	}
 
-	// Help line
-	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("  s: show/hide password  c: copy  e: edit  esc: back"))
-	b.WriteString("\n")
-
 	if m.copied {
-		b.WriteString(styles.SuccessStyle.Render(fmt.Sprintf("  Copied to clipboard! Will clear in %s", m.cfg.ClipboardTimeout)))
 		b.WriteString("\n")
+		b.WriteString(styles.SuccessCardStyle.Width(56).Render(
+			"  " + styles.SuccessStyle.Render("Copied to clipboard!") + "\n" +
+				"  " + styles.MutedStyle.Render(fmt.Sprintf("Will auto-clear in %s", m.cfg.ClipboardTimeout)),
+		))
 	}
 
 	return b.String()
 }
 
-func (m *DetailModel) renderCredential() string {
-	var b strings.Builder
-	b.WriteString("\n")
-	b.WriteString(styles.LabelStyle.Render("  Name:     ") + m.name + "\n")
-	b.WriteString(styles.LabelStyle.Render("  URL:      ") + m.url + "\n")
-	b.WriteString(styles.LabelStyle.Render("  Username: ") + m.username + "\n")
+func (m *DetailModel) renderCredentialCard() string {
+	visibilityIcon := "  [hidden]"
+	if m.showPassword {
+		visibilityIcon = "  [visible]"
+	}
 
-	pw := strings.Repeat("*", 12)
+	pw := strings.Repeat("● ", 8)
 	if m.showPassword {
 		pw = m.password
 	}
-	b.WriteString(styles.LabelStyle.Render("  Password: ") + pw + "\n")
+
+	rows := []string{
+		m.detailRow("Name", m.name, styles.Text),
+		m.detailRow("URL", m.url, styles.Accent),
+		m.detailRow("Username", m.username, styles.Text),
+	}
+
+	// Password row with visibility indicator
+	pwLabel := styles.LabelStyle.Render("  Password    ")
+	pwValue := lipgloss.NewStyle().Foreground(styles.WarningDim).Render(pw)
+	pwHint := styles.MutedStyle.Render(visibilityIcon)
+	rows = append(rows, pwLabel+pwValue+pwHint)
 
 	if m.notes != "" {
-		b.WriteString(styles.LabelStyle.Render("  Notes:    ") + m.notes + "\n")
+		rows = append(rows, "")
+		rows = append(rows, m.detailRow("Notes", m.notes, styles.TextDim))
 	}
-	return b.String()
+
+	header := "  " + styles.TitleStyle.Render("Credential Details")
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		append([]string{header, ""}, rows...)...,
+	)
+
+	return styles.HighlightCardStyle.Width(56).Render(content)
 }
 
-func (m *DetailModel) renderEnvSecret() string {
-	var b strings.Builder
-	b.WriteString("\n")
-	b.WriteString(styles.LabelStyle.Render("  Key:         ") + m.key + "\n")
-	b.WriteString(styles.LabelStyle.Render("  Environment: ") + envBadge(m.env) + "\n")
+func (m *DetailModel) renderEnvSecretCard() string {
+	visibilityIcon := "  [hidden]"
+	if m.showPassword {
+		visibilityIcon = "  [visible]"
+	}
 
-	val := strings.Repeat("*", 12)
+	val := strings.Repeat("● ", 8)
 	if m.showPassword {
 		val = m.value
 	}
-	b.WriteString(styles.LabelStyle.Render("  Value:       ") + val + "\n")
+
+	rows := []string{
+		m.detailRow("Key", m.key, styles.Text),
+		"  " + styles.LabelStyle.Render("Environment   ") + styles.EnvBadge(m.env),
+	}
+
+	// Value row
+	valLabel := styles.LabelStyle.Render("  Value       ")
+	valValue := lipgloss.NewStyle().Foreground(styles.WarningDim).Render(val)
+	valHint := styles.MutedStyle.Render(visibilityIcon)
+	rows = append(rows, valLabel+valValue+valHint)
 
 	if m.notes != "" {
-		b.WriteString(styles.LabelStyle.Render("  Description: ") + m.notes + "\n")
+		rows = append(rows, "")
+		rows = append(rows, m.detailRow("Description", m.notes, styles.TextDim))
 	}
-	return b.String()
+
+	// Shell usage hint
+	rows = append(rows, "")
+	rows = append(rows,
+		styles.MutedStyle.Render("  Shell usage:"),
+	)
+	rows = append(rows,
+		styles.AccentStyle.Render("  eval $(secrets env -p "+m.env+")"),
+	)
+
+	header := "  " + styles.TitleStyle.Render("Env Secret Details")
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		append([]string{header, ""}, rows...)...,
+	)
+
+	return styles.HighlightCardStyle.Width(56).Render(content)
+}
+
+func (m *DetailModel) detailRow(label, value string, color lipgloss.Color) string {
+	padded := fmt.Sprintf("%-14s", label)
+	return "  " + styles.LabelStyle.Render(padded) +
+		lipgloss.NewStyle().Foreground(color).Render(value)
 }

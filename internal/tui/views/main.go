@@ -7,9 +7,9 @@ import (
 	"github.com/bdryanovski/secrets/internal/config"
 	"github.com/bdryanovski/secrets/internal/database"
 	"github.com/bdryanovski/secrets/internal/tui/styles"
-	"github.com/bdryanovski/secrets/internal/version"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Tab constants
@@ -52,7 +52,8 @@ type MainModel struct {
 	importView *ImportModel
 	passGen    *PasswordGenModel
 
-	statusMsg string
+	statusMsg  string
+	statusType string // "success", "error", "info"
 }
 
 // NewMainModel creates the main application model.
@@ -63,10 +64,8 @@ func NewMainModel(cfg *config.Config, db *database.DB) *MainModel {
 		activeTab: TabCredentials,
 		viewMode:  ViewList,
 	}
-
 	m.credList = NewCredentialListModel(db)
 	m.envList = NewEnvSecretListModel(db)
-
 	return m
 }
 
@@ -86,11 +85,13 @@ func (m *MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case statusMsg:
 		m.statusMsg = string(msg)
+		m.statusType = "info"
 		return m, nil
 
 	case backToListMsg:
 		m.viewMode = ViewList
 		m.statusMsg = string(msg)
+		m.statusType = "success"
 		var cmd tea.Cmd
 		if m.activeTab == TabCredentials {
 			cmd = m.credList.loadCredentials()
@@ -131,7 +132,6 @@ func (m *MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Delegate to sub-views.
 	return m.delegateUpdate(msg)
 }
 
@@ -144,7 +144,6 @@ func (m *MainModel) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.activeTab = TabCredentials
 		}
 		return m, nil
-
 	case "a":
 		m.viewMode = ViewAdd
 		if m.activeTab == TabCredentials {
@@ -153,7 +152,6 @@ func (m *MainModel) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.envForm = NewEnvSecretFormModel(nil, m.db)
 		}
 		return m, nil
-
 	case "enter":
 		m.viewMode = ViewDetail
 		if m.activeTab == TabCredentials {
@@ -171,28 +169,23 @@ func (m *MainModel) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.viewMode = ViewList
 		return m, nil
-
 	case "d":
 		m.viewMode = ViewDelete
 		return m, nil
-
 	case "/":
 		m.viewMode = ViewSearch
 		m.search = NewSearchModel(m.db)
 		return m, m.search.Init()
-
 	case "i":
 		m.viewMode = ViewImport
 		m.importView = NewImportModel(m.db)
 		return m, nil
-
 	case "g":
 		m.viewMode = ViewGeneratePassword
 		m.passGen = NewPasswordGenModel(m.cfg)
 		return m, m.passGen.Init()
 	}
 
-	// Delegate navigation to list sub-views.
 	var cmd tea.Cmd
 	if m.activeTab == TabCredentials {
 		cmd = m.credList.handleKey(msg)
@@ -222,7 +215,6 @@ func (m *MainModel) handleDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-
 	var cmd tea.Cmd
 	if m.detail != nil {
 		cmd = m.detail.handleKey(msg)
@@ -236,7 +228,6 @@ func (m *MainModel) handleFormKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewMode = ViewList
 		return m, nil
 	case "tab", "shift+tab", "up", "down", "ctrl+s":
-		// Navigation and save keys -- handled by the form's handleKey only.
 		var cmd tea.Cmd
 		if m.activeTab == TabCredentials && m.credForm != nil {
 			cmd = m.credForm.handleKey(msg)
@@ -245,7 +236,6 @@ func (m *MainModel) handleFormKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	case "enter":
-		// Enter moves to next field or saves -- handled by handleKey only.
 		var cmd tea.Cmd
 		if m.activeTab == TabCredentials && m.credForm != nil {
 			cmd = m.credForm.handleKey(msg)
@@ -254,8 +244,6 @@ func (m *MainModel) handleFormKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	}
-
-	// All other keys (character input) -- forward to textinput via update.
 	var cmd tea.Cmd
 	if m.activeTab == TabCredentials && m.credForm != nil {
 		cmd = m.credForm.update(msg)
@@ -273,12 +261,14 @@ func (m *MainModel) handleDeleteKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if cred != nil {
 				m.db.DeleteCredential(cred.ID)
 				m.statusMsg = fmt.Sprintf("Deleted: %s", cred.Name)
+				m.statusType = "success"
 			}
 		} else {
 			env := m.envList.Selected()
 			if env != nil {
 				m.db.DeleteEnvSecret(env.ID)
 				m.statusMsg = fmt.Sprintf("Deleted: %s [%s]", env.Key, env.Environment)
+				m.statusType = "success"
 			}
 		}
 		m.viewMode = ViewList
@@ -302,15 +292,12 @@ func (m *MainModel) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewMode = ViewList
 		return m, nil
 	case "enter":
-		// Enter triggers search -- handled by handleKey only.
 		var cmd tea.Cmd
 		if m.search != nil {
 			cmd = m.search.handleKey(msg)
 		}
 		return m, cmd
 	}
-
-	// Character input -- forward to textinput via update.
 	var cmd tea.Cmd
 	if m.search != nil {
 		cmd = m.search.update(msg)
@@ -324,15 +311,12 @@ func (m *MainModel) handleImportKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewMode = ViewList
 		return m, nil
 	case "enter", "1", "2":
-		// Enter triggers import/save, 1/2 selects source -- handled by handleKey only.
 		var cmd tea.Cmd
 		if m.importView != nil {
 			cmd = m.importView.handleKey(msg)
 		}
 		return m, cmd
 	}
-
-	// Character input -- forward to textinput via update.
 	var cmd tea.Cmd
 	if m.importView != nil {
 		cmd = m.importView.update(msg)
@@ -346,7 +330,6 @@ func (m *MainModel) handlePassGenKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewMode = ViewList
 		return m, nil
 	}
-
 	var cmd tea.Cmd
 	if m.passGen != nil {
 		cmd = m.passGen.handleKey(msg)
@@ -389,78 +372,195 @@ func (m *MainModel) delegateUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// ── View ─────────────────────────────────────────────────────────────────────
+
 func (m *MainModel) View() string {
-	var b strings.Builder
+	contentWidth := m.width
+	if contentWidth < 60 {
+		contentWidth = 60
+	}
+	if contentWidth > 100 {
+		contentWidth = 100
+	}
+
+	var sections []string
 
 	// Header
-	b.WriteString(styles.TitleStyle.Render("  Secrets Manager"))
-	b.WriteString("  ")
-	b.WriteString(styles.MutedStyle.Render(version.Version))
-	b.WriteString("\n")
+	sections = append(sections, m.renderHeader(contentWidth))
 
-	// Tabs
-	b.WriteString("  ")
-	if m.activeTab == TabCredentials {
-		b.WriteString(styles.ActiveTabStyle.Render("Credentials"))
-	} else {
-		b.WriteString(styles.InactiveTabStyle.Render("Credentials"))
+	// Tabs (only in list view or when relevant)
+	if m.viewMode == ViewList || m.viewMode == ViewDelete {
+		sections = append(sections, m.renderTabs(contentWidth))
 	}
-	if m.activeTab == TabEnvSecrets {
-		b.WriteString(styles.ActiveTabStyle.Render("Env Secrets"))
-	} else {
-		b.WriteString(styles.InactiveTabStyle.Render("Env Secrets"))
-	}
-	b.WriteString("\n")
-	b.WriteString(styles.MutedStyle.Render("  " + strings.Repeat("─", 50)))
-	b.WriteString("\n")
 
 	// Content
-	switch m.viewMode {
-	case ViewList:
-		if m.activeTab == TabCredentials {
-			b.WriteString(m.credList.View())
-		} else {
-			b.WriteString(m.envList.View())
-		}
-	case ViewDetail:
-		if m.detail != nil {
-			b.WriteString(m.detail.View())
-		}
-	case ViewAdd, ViewEdit:
-		if m.activeTab == TabCredentials && m.credForm != nil {
-			b.WriteString(m.credForm.View())
-		} else if m.envForm != nil {
-			b.WriteString(m.envForm.View())
-		}
-	case ViewDelete:
-		b.WriteString(m.renderDeleteConfirm())
-	case ViewSearch:
-		if m.search != nil {
-			b.WriteString(m.search.View())
-		}
-	case ViewImport:
-		if m.importView != nil {
-			b.WriteString(m.importView.View())
-		}
-	case ViewGeneratePassword:
-		if m.passGen != nil {
-			b.WriteString(m.passGen.View())
-		}
-	}
+	sections = append(sections, m.renderContent(contentWidth))
 
 	// Status bar
 	if m.statusMsg != "" {
-		b.WriteString("\n")
-		b.WriteString(styles.StatusBarStyle.Render("  " + m.statusMsg))
+		sections = append(sections, m.renderStatus(contentWidth))
 	}
 
-	// Help
-	b.WriteString("\n")
-	if m.viewMode == ViewList {
-		b.WriteString(styles.HelpStyle.Render("  tab: switch  a: add  enter: view  d: delete  /: search  g: generate  i: import  q: quit"))
-	}
+	// Help footer
+	sections = append(sections, m.renderFooter())
 
-	return b.String()
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+func (m *MainModel) renderHeader(width int) string {
+	logo := styles.LogoSmall()
+	spacer := strings.Repeat(" ", max(1, width-lipgloss.Width(logo)-20))
+	viewLabel := m.viewModeLabel()
+
+	header := styles.HeaderBarStyle.Width(width).Render(
+		logo + spacer + styles.DimStyle.Render(viewLabel),
+	)
+	return header
+}
+
+func (m *MainModel) viewModeLabel() string {
+	switch m.viewMode {
+	case ViewList:
+		return "Browse"
+	case ViewDetail:
+		return "Detail"
+	case ViewAdd:
+		return "Add New"
+	case ViewEdit:
+		return "Edit"
+	case ViewDelete:
+		return "Delete"
+	case ViewSearch:
+		return "Search"
+	case ViewImport:
+		return "Import"
+	case ViewGeneratePassword:
+		return "Generate"
+	}
+	return ""
+}
+
+func (m *MainModel) renderTabs(width int) string {
+	var tabs []string
+	tabLabels := []string{"  Credentials  ", "  Env Secrets  "}
+	for i, label := range tabLabels {
+		if i == m.activeTab {
+			tabs = append(tabs, styles.ActiveTabStyle.Render(label))
+		} else {
+			tabs = append(tabs, styles.InactiveTabStyle.Render(label))
+		}
+	}
+	tabRow := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
+	tabLine := styles.DividerStyle.Render(strings.Repeat("─", width))
+	return tabRow + "\n" + tabLine
+}
+
+func (m *MainModel) renderContent(width int) string {
+	switch m.viewMode {
+	case ViewList:
+		if m.activeTab == TabCredentials {
+			return m.credList.View()
+		}
+		return m.envList.View()
+	case ViewDetail:
+		if m.detail != nil {
+			return m.detail.View()
+		}
+	case ViewAdd, ViewEdit:
+		if m.activeTab == TabCredentials && m.credForm != nil {
+			return m.credForm.View()
+		} else if m.envForm != nil {
+			return m.envForm.View()
+		}
+	case ViewDelete:
+		return m.renderDeleteConfirm()
+	case ViewSearch:
+		if m.search != nil {
+			return m.search.View()
+		}
+	case ViewImport:
+		if m.importView != nil {
+			return m.importView.View()
+		}
+	case ViewGeneratePassword:
+		if m.passGen != nil {
+			return m.passGen.View()
+		}
+	}
+	return ""
+}
+
+func (m *MainModel) renderStatus(width int) string {
+	icon := "i"
+	style := styles.StatusBarStyle
+	switch m.statusType {
+	case "success":
+		icon = "+"
+		style = style.Background(styles.Success).Foreground(styles.BgDark)
+	case "error":
+		icon = "!"
+		style = style.Background(styles.Danger).Foreground(styles.Text)
+	}
+	return style.Width(width).Render(" " + icon + "  " + m.statusMsg)
+}
+
+func (m *MainModel) renderFooter() string {
+	switch m.viewMode {
+	case ViewList:
+		return styles.HelpBar(
+			styles.KeyHint("tab", "switch"),
+			styles.KeyHint("a", "add"),
+			styles.KeyHint("enter", "view"),
+			styles.KeyHint("d", "delete"),
+			styles.KeyHint("/", "search"),
+			styles.KeyHint("g", "generate"),
+			styles.KeyHint("i", "import"),
+			styles.KeyHint("q", "quit"),
+		)
+	case ViewDetail:
+		return styles.HelpBar(
+			styles.KeyHint("s", "show/hide"),
+			styles.KeyHint("c", "copy"),
+			styles.KeyHint("e", "edit"),
+			styles.KeyHint("esc", "back"),
+		)
+	case ViewAdd, ViewEdit:
+		return styles.HelpBar(
+			styles.KeyHint("tab", "next field"),
+			styles.KeyHint("shift+tab", "prev"),
+			styles.KeyHint("ctrl+s", "save"),
+			styles.KeyHint("esc", "cancel"),
+		)
+	case ViewDelete:
+		return styles.HelpBar(
+			styles.KeyHint("y", "confirm"),
+			styles.KeyHint("n", "cancel"),
+		)
+	case ViewGeneratePassword:
+		return styles.HelpBar(
+			styles.KeyHint("r", "regenerate"),
+			styles.KeyHint("c", "copy"),
+			styles.KeyHint("+/-", "length"),
+			styles.KeyHint("u", "upper"),
+			styles.KeyHint("l", "lower"),
+			styles.KeyHint("d", "digits"),
+			styles.KeyHint("s", "symbols"),
+			styles.KeyHint("esc", "back"),
+		)
+	case ViewSearch:
+		return styles.HelpBar(
+			styles.KeyHint("enter", "search"),
+			styles.KeyHint("esc", "back"),
+		)
+	case ViewImport:
+		return styles.HelpBar(
+			styles.KeyHint("1/2", "source"),
+			styles.KeyHint("enter", "import"),
+			styles.KeyHint("esc", "back"),
+		)
+	default:
+		return styles.HelpBar(styles.KeyHint("esc", "back"))
+	}
 }
 
 func (m *MainModel) renderDeleteConfirm() string {
@@ -477,11 +577,19 @@ func (m *MainModel) renderDeleteConfirm() string {
 		}
 	}
 
-	return styles.BoxStyle.Render(
-		styles.DangerStyle.Render("  Delete: "+name+"?") + "\n\n" +
-			"  Press " + styles.DangerStyle.Render("y") + " to confirm, " +
-			styles.MutedStyle.Render("n") + " to cancel",
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		"",
+		styles.DangerStyle.Render("  Are you sure you want to delete this?"),
+		"",
+		"  "+styles.HeadingStyle.Render(name),
+		"",
+		"  "+styles.MutedStyle.Render("This action cannot be undone."),
+		"",
+		"  Press "+styles.KeyStyle.Render("y")+" to confirm, "+
+			styles.KeyStyle.Render("n")+" to cancel",
+		"",
 	)
+	return "\n" + styles.DangerCardStyle.Render(content)
 }
 
 // statusMsg is a tea.Msg carrying a status bar message.

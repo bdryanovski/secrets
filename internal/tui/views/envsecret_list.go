@@ -9,6 +9,7 @@ import (
 	"github.com/bdryanovski/secrets/internal/tui/styles"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // EnvSecretListModel displays a list of environment secrets.
@@ -17,7 +18,7 @@ type EnvSecretListModel struct {
 	items  []models.EnvSecret
 	cursor int
 	err    string
-	filter string // environment filter (empty = show all)
+	filter string
 }
 
 // NewEnvSecretListModel creates a new env secret list view.
@@ -68,7 +69,9 @@ func (m *EnvSecretListModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case "home":
 		m.cursor = 0
 	case "end":
-		m.cursor = len(m.items) - 1
+		if len(m.items) > 0 {
+			m.cursor = len(m.items) - 1
+		}
 	case "1":
 		m.filter = "development"
 		return m.loadEnvSecrets()
@@ -96,69 +99,104 @@ func (m *EnvSecretListModel) Selected() *models.EnvSecret {
 func (m *EnvSecretListModel) View() string {
 	var b strings.Builder
 
-	// Environment filter bar
+	// Environment filter pills
+	b.WriteString("\n")
 	b.WriteString("  ")
-	envs := []struct{ key, label string }{
-		{"", "All (0)"},
-		{"development", "Dev (1)"},
-		{"staging", "Staging (2)"},
-		{"production", "Prod (3)"},
+	filters := []struct {
+		key, label, value string
+	}{
+		{"0", "All", ""},
+		{"1", "Dev", "development"},
+		{"2", "Staging", "staging"},
+		{"3", "Prod", "production"},
 	}
-	for _, e := range envs {
-		if m.filter == e.key {
-			b.WriteString(styles.ActiveTabStyle.Render(e.label))
+	for i, f := range filters {
+		if i > 0 {
+			b.WriteString(" ")
+		}
+		label := f.label + " (" + f.key + ")"
+		if m.filter == f.value {
+			b.WriteString(styles.Badge(" "+label+" ", styles.BgDark, styles.Primary))
 		} else {
-			b.WriteString(styles.InactiveTabStyle.Render(e.label))
+			b.WriteString(styles.Badge(" "+label+" ", styles.TextDim, styles.BgCard))
 		}
 	}
-	b.WriteString("\n\n")
+	b.WriteString("\n")
 
 	if m.err != "" {
-		b.WriteString(styles.DangerStyle.Render("  Error: " + m.err))
+		b.WriteString("\n")
+		b.WriteString(styles.DangerCardStyle.Render(
+			styles.DangerStyle.Render("  Error: " + m.err),
+		))
 		b.WriteString("\n")
 		return b.String()
 	}
 
 	if len(m.items) == 0 {
-		b.WriteString(styles.MutedStyle.Render("  No env secrets stored yet. Press 'a' to add one."))
-		b.WriteString("\n")
+		b.WriteString(m.emptyState())
 		return b.String()
 	}
 
+	// Count badge
+	countBadge := styles.Badge(
+		fmt.Sprintf(" %d items ", len(m.items)),
+		styles.BgDark, styles.PrimaryDim,
+	)
+	b.WriteString("\n  " + countBadge + "\n\n")
+
+	// Table header
+	header := fmt.Sprintf("  %-3s %-30s %-12s %s", "#", "KEY", "ENV", "DESCRIPTION")
+	b.WriteString(styles.MutedStyle.Render(header))
+	b.WriteString("\n")
+	b.WriteString("  " + styles.Divider(70))
+	b.WriteString("\n")
+
+	// Rows
 	for i, env := range m.items {
-		cursor := "  "
-		if i == m.cursor {
-			cursor = styles.SelectedStyle.Render("> ")
-		}
-
-		key := env.Key
-		if len(key) > 30 {
-			key = key[:27] + "..."
-		}
-
-		envLabel := envBadge(env.Environment)
-		line := fmt.Sprintf("%-32s %s", key, envLabel)
-
-		if i == m.cursor {
-			b.WriteString(cursor + styles.SelectedStyle.Render(line))
-		} else {
-			b.WriteString(cursor + styles.NormalStyle.Render(line))
-		}
+		b.WriteString(m.renderRow(i, env))
 		b.WriteString("\n")
 	}
 
 	return b.String()
 }
 
-func envBadge(env string) string {
-	switch env {
-	case "production":
-		return styles.DangerStyle.Render("[prod]")
-	case "staging":
-		return styles.WarningStyle.Render("[staging]")
-	case "development":
-		return styles.SuccessStyle.Render("[dev]")
-	default:
-		return styles.MutedStyle.Render("[" + env + "]")
+func (m *EnvSecretListModel) renderRow(idx int, env models.EnvSecret) string {
+	key := truncate(env.Key, 28)
+	desc := truncate(env.Description, 20)
+	badge := styles.EnvBadge(env.Environment)
+	num := fmt.Sprintf("%-3d", idx+1)
+
+	if idx == m.cursor {
+		row := fmt.Sprintf("%-3s %-30s %s  %s", num, key, badge, desc)
+		return styles.SelectedRowStyle.Render(
+			styles.SelectedStyle.Render("> ") + row,
+		)
 	}
+
+	return fmt.Sprintf("  %s %-30s %s  %s",
+		styles.MutedStyle.Render(num),
+		styles.NormalStyle.Render(key),
+		badge,
+		styles.MutedStyle.Render(desc),
+	)
+}
+
+func (m *EnvSecretListModel) emptyState() string {
+	art := lipgloss.NewStyle().Foreground(styles.Subtle).Render(`
+      _____
+     |     |
+     | ENV |
+     |_____|
+      |   |
+      |___|
+`)
+
+	content := lipgloss.JoinVertical(lipgloss.Center,
+		art,
+		styles.MutedStyle.Render("No environment secrets stored yet"),
+		"",
+		styles.DimStyle.Render("Press ")+styles.KeyStyle.Render("a")+styles.DimStyle.Render(" to add your first env secret"),
+		styles.DimStyle.Render("Secrets can have different values per environment"),
+	)
+	return "\n" + content + "\n"
 }

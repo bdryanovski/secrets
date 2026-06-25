@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 const (
@@ -19,30 +20,56 @@ const (
 	envFieldCount
 )
 
+var envSecretFields = []fieldMeta{
+	{
+		label: "Key",
+		hint:  "Required",
+		desc:  "The environment variable name (e.g., API_KEY, DATABASE_URL)",
+	},
+	{
+		label: "Value",
+		hint:  "Will be encrypted",
+		desc:  "The secret value, encrypted with AES-256-GCM before storage",
+	},
+	{
+		label: "Environment",
+		hint:  "development / staging / production",
+		desc:  "Which environment this value belongs to. Same key can have different values per env",
+	},
+	{
+		label: "Description",
+		hint:  "Optional",
+		desc:  "A note about what this secret is used for or where it comes from",
+	},
+}
+
 // EnvSecretFormModel handles adding/editing an env secret.
 type EnvSecretFormModel struct {
 	db      *database.DB
-	editing *models.EnvSecret // nil if adding new
+	editing *models.EnvSecret
 	inputs  []textinput.Model
 	focused int
 	err     string
 }
 
-// NewEnvSecretFormModel creates an env secret form. Pass nil for a new secret.
+// NewEnvSecretFormModel creates an env secret form.
 func NewEnvSecretFormModel(env *models.EnvSecret, db *database.DB) *EnvSecretFormModel {
 	inputs := make([]textinput.Model, envFieldCount)
 
 	for i := range inputs {
 		inputs[i] = textinput.New()
-		inputs[i].Width = 40
+		inputs[i].Width = 44
+		inputs[i].PromptStyle = lipgloss.NewStyle().Foreground(styles.Primary)
+		inputs[i].TextStyle = lipgloss.NewStyle().Foreground(styles.Text)
+		inputs[i].PlaceholderStyle = lipgloss.NewStyle().Foreground(styles.Muted)
 	}
 
-	inputs[envFieldKey].Placeholder = "Key (e.g., API_KEY)"
-	inputs[envFieldValue].Placeholder = "Value"
+	inputs[envFieldKey].Placeholder = "e.g., API_KEY"
+	inputs[envFieldValue].Placeholder = "Enter secret value"
 	inputs[envFieldValue].EchoMode = textinput.EchoPassword
-	inputs[envFieldValue].EchoCharacter = '*'
-	inputs[envFieldEnvironment].Placeholder = "Environment (development/staging/production)"
-	inputs[envFieldDescription].Placeholder = "Description (optional)"
+	inputs[envFieldValue].EchoCharacter = '●'
+	inputs[envFieldEnvironment].Placeholder = "development"
+	inputs[envFieldDescription].Placeholder = "e.g., Stripe API key for payments"
 
 	if env != nil {
 		inputs[envFieldKey].SetValue(env.Key)
@@ -128,7 +155,6 @@ func (m *EnvSecretFormModel) save() tea.Cmd {
 			}
 			return backToListMsg("Updated: " + secret.Key + " [" + secret.Environment + "]")
 		}
-
 		if err := db.CreateEnvSecret(secret); err != nil {
 			return statusMsg("Error: " + err.Error())
 		}
@@ -140,27 +166,49 @@ func (m *EnvSecretFormModel) View() string {
 	var b strings.Builder
 
 	title := "Add Env Secret"
+	icon := "+"
 	if m.editing != nil {
 		title = "Edit Env Secret"
+		icon = "~"
 	}
+
 	b.WriteString("\n")
-	b.WriteString(styles.TitleStyle.Render("  " + title))
+	b.WriteString("  " + styles.TitleStyle.Render(icon+" "+title))
+	b.WriteString("   " + styles.ProgressDots(m.focused, envFieldCount))
+	b.WriteString("\n")
+	b.WriteString("  " + styles.MutedStyle.Render("Environment secrets can be sourced into your shell"))
+	b.WriteString("\n")
+	b.WriteString("  " + styles.MutedStyle.Render("using: eval $(secrets env --profile <environment>)"))
 	b.WriteString("\n\n")
 
-	labels := []string{"Key:", "Value:", "Environment:", "Description:"}
-	for i, label := range labels {
-		b.WriteString(styles.LabelStyle.Render("  " + label))
-		b.WriteString("\n  ")
-		b.WriteString(m.inputs[i].View())
-		b.WriteString("\n\n")
+	for i, meta := range envSecretFields {
+		b.WriteString(m.renderField(i, meta))
 	}
 
 	if m.err != "" {
-		b.WriteString(styles.DangerStyle.Render("  " + m.err))
+		b.WriteString("\n")
+		b.WriteString("  " + styles.DangerStyle.Render("! "+m.err))
 		b.WriteString("\n")
 	}
 
-	b.WriteString(styles.HelpStyle.Render("  tab/shift+tab: navigate  ctrl+s/enter(last): save  esc: cancel"))
+	return b.String()
+}
+
+func (m *EnvSecretFormModel) renderField(idx int, meta fieldMeta) string {
+	var b strings.Builder
+
+	label := styles.LabelStyle.Render("  " + meta.label)
+	hint := styles.HintStyle.Render(" (" + meta.hint + ")")
+	b.WriteString(label + hint + "\n")
+
+	b.WriteString(styles.MutedStyle.Render("  "+meta.desc) + "\n")
+
+	inputView := m.inputs[idx].View()
+	if idx == m.focused {
+		b.WriteString(styles.InputGroupFocusedStyle.Render("  " + inputView))
+	} else {
+		b.WriteString(styles.InputGroupStyle.Render("  " + inputView))
+	}
 	b.WriteString("\n")
 
 	return b.String()

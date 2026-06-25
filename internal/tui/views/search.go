@@ -10,6 +10,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // SearchModel handles searching across credentials and env secrets.
@@ -27,7 +28,10 @@ func NewSearchModel(db *database.DB) *SearchModel {
 	ti := textinput.New()
 	ti.Placeholder = "Search credentials and env secrets..."
 	ti.Focus()
-	ti.Width = 50
+	ti.Width = 48
+	ti.PromptStyle = lipgloss.NewStyle().Foreground(styles.Primary)
+	ti.TextStyle = lipgloss.NewStyle().Foreground(styles.Text)
+	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(styles.Muted)
 
 	return &SearchModel{
 		db:    db,
@@ -90,55 +94,77 @@ func (m *SearchModel) View() string {
 	var b strings.Builder
 
 	b.WriteString("\n")
-	b.WriteString(styles.TitleStyle.Render("  Search"))
-	b.WriteString("\n\n")
-	b.WriteString("  ")
-	b.WriteString(m.input.View())
+	b.WriteString("  " + styles.TitleStyle.Render("Search"))
+	b.WriteString("\n")
+	b.WriteString("  " + styles.MutedStyle.Render("Find credentials and env secrets by name, key, or URL"))
 	b.WriteString("\n\n")
 
+	// Search input in a card
+	searchBox := styles.InputGroupFocusedStyle.Width(54).Render(
+		"  " + m.input.View(),
+	)
+	b.WriteString(searchBox)
+	b.WriteString("\n")
+
 	if m.err != "" {
-		b.WriteString(styles.DangerStyle.Render("  Error: " + m.err))
+		b.WriteString("\n")
+		b.WriteString(styles.DangerCardStyle.Render(
+			"  " + styles.DangerStyle.Render("Error: "+m.err),
+		))
 		b.WriteString("\n")
 		return b.String()
 	}
 
 	if !m.queried {
-		b.WriteString(styles.MutedStyle.Render("  Type a query and press Enter"))
+		b.WriteString("\n")
+		b.WriteString("  " + styles.MutedStyle.Render("Press Enter to search"))
 		b.WriteString("\n")
 		return b.String()
 	}
 
 	total := len(m.creds) + len(m.envs)
-	b.WriteString(styles.MutedStyle.Render(fmt.Sprintf("  Found %d results", total)))
-	b.WriteString("\n\n")
+	b.WriteString("\n")
+	if total == 0 {
+		b.WriteString("  " + styles.MutedStyle.Render("No results found"))
+		b.WriteString("\n")
+		return b.String()
+	}
+
+	resultBadge := styles.Badge(
+		fmt.Sprintf(" %d results ", total),
+		styles.BgDark, styles.PrimaryDim,
+	)
+	b.WriteString("  " + resultBadge + "\n\n")
 
 	if len(m.creds) > 0 {
-		b.WriteString(styles.LabelStyle.Render("  Credentials:"))
-		b.WriteString("\n")
+		credHeader := styles.Badge(" Credentials ", styles.BgDark, styles.Accent)
+		b.WriteString("  " + credHeader + "\n\n")
+
 		for _, c := range m.creds {
+			name := truncate(c.Name, 24)
+			user := truncate(c.Username, 20)
+			url := truncate(c.URL, 24)
 			b.WriteString(fmt.Sprintf("    %s  %s  %s\n",
-				styles.NormalStyle.Render(c.Name),
-				styles.MutedStyle.Render(c.Username),
-				styles.MutedStyle.Render(c.URL),
+				styles.NormalStyle.Render(name),
+				styles.DimStyle.Render(user),
+				styles.MutedStyle.Render(url),
 			))
 		}
 		b.WriteString("\n")
 	}
 
 	if len(m.envs) > 0 {
-		b.WriteString(styles.LabelStyle.Render("  Env Secrets:"))
-		b.WriteString("\n")
+		envHeader := styles.Badge(" Env Secrets ", styles.BgDark, styles.Success)
+		b.WriteString("  " + envHeader + "\n\n")
+
 		for _, e := range m.envs {
+			key := truncate(e.Key, 28)
 			b.WriteString(fmt.Sprintf("    %s  %s\n",
-				styles.NormalStyle.Render(e.Key),
-				envBadge(e.Environment),
+				styles.NormalStyle.Render(key),
+				styles.EnvBadge(e.Environment),
 			))
 		}
 	}
-
-	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("  enter: search  esc: back"))
-	b.WriteString("\n")
 
 	return b.String()
 }
