@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 const (
@@ -20,10 +21,45 @@ const (
 	fieldCount
 )
 
+// fieldMeta holds label, hint, and description for each form field.
+type fieldMeta struct {
+	label string
+	hint  string
+	desc  string
+}
+
+var credentialFields = []fieldMeta{
+	{
+		label: "Name",
+		hint:  "Required",
+		desc:  "A friendly name for this credential (e.g., \"GitHub\", \"Work Email\")",
+	},
+	{
+		label: "URL",
+		hint:  "Optional",
+		desc:  "The website login page URL for quick reference",
+	},
+	{
+		label: "Username",
+		hint:  "Optional",
+		desc:  "Your login username or email address for this service",
+	},
+	{
+		label: "Password",
+		hint:  "Will be encrypted",
+		desc:  "The password is encrypted with AES-256-GCM before storage",
+	},
+	{
+		label: "Notes",
+		hint:  "Optional",
+		desc:  "Any additional information, recovery codes, or reminders",
+	},
+}
+
 // CredentialFormModel handles adding/editing a credential.
 type CredentialFormModel struct {
 	db      *database.DB
-	editing *models.Credential // nil if adding new
+	editing *models.Credential
 	inputs  []textinput.Model
 	focused int
 	err     string
@@ -35,16 +71,19 @@ func NewCredentialFormModel(cred *models.Credential, db *database.DB) *Credentia
 
 	for i := range inputs {
 		inputs[i] = textinput.New()
-		inputs[i].Width = 40
+		inputs[i].Width = 44
+		inputs[i].PromptStyle = lipgloss.NewStyle().Foreground(styles.Primary)
+		inputs[i].TextStyle = lipgloss.NewStyle().Foreground(styles.Text)
+		inputs[i].PlaceholderStyle = lipgloss.NewStyle().Foreground(styles.Muted)
 	}
 
-	inputs[fieldName].Placeholder = "Name (e.g., GitHub)"
-	inputs[fieldURL].Placeholder = "URL (e.g., https://github.com)"
-	inputs[fieldUsername].Placeholder = "Username or email"
-	inputs[fieldPassword].Placeholder = "Password"
+	inputs[fieldName].Placeholder = "e.g., GitHub"
+	inputs[fieldURL].Placeholder = "e.g., https://github.com/login"
+	inputs[fieldUsername].Placeholder = "e.g., user@example.com"
+	inputs[fieldPassword].Placeholder = "Enter password"
 	inputs[fieldPassword].EchoMode = textinput.EchoPassword
-	inputs[fieldPassword].EchoCharacter = '*'
-	inputs[fieldNotes].Placeholder = "Notes (optional)"
+	inputs[fieldPassword].EchoCharacter = '●'
+	inputs[fieldNotes].Placeholder = "e.g., 2FA recovery codes"
 
 	if cred != nil {
 		inputs[fieldName].SetValue(cred.Name)
@@ -89,7 +128,6 @@ func (m *CredentialFormModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		if m.focused == fieldCount-1 {
 			return m.save()
 		}
-		// Move to next field.
 		m.inputs[m.focused].Blur()
 		m.focused++
 		m.inputs[m.focused].Focus()
@@ -126,7 +164,6 @@ func (m *CredentialFormModel) save() tea.Cmd {
 			}
 			return backToListMsg("Updated: " + cred.Name)
 		}
-
 		if err := db.CreateCredential(cred); err != nil {
 			return statusMsg("Error: " + err.Error())
 		}
@@ -138,27 +175,48 @@ func (m *CredentialFormModel) View() string {
 	var b strings.Builder
 
 	title := "Add Credential"
+	icon := "+"
 	if m.editing != nil {
 		title = "Edit Credential"
+		icon = "~"
 	}
+
 	b.WriteString("\n")
-	b.WriteString(styles.TitleStyle.Render("  " + title))
+	b.WriteString("  " + styles.TitleStyle.Render(icon+" "+title))
+	b.WriteString("   " + styles.ProgressDots(m.focused, fieldCount))
 	b.WriteString("\n\n")
 
-	labels := []string{"Name:", "URL:", "Username:", "Password:", "Notes:"}
-	for i, label := range labels {
-		b.WriteString(styles.LabelStyle.Render("  " + label))
-		b.WriteString("\n  ")
-		b.WriteString(m.inputs[i].View())
-		b.WriteString("\n\n")
+	for i, meta := range credentialFields {
+		b.WriteString(m.renderField(i, meta))
 	}
 
 	if m.err != "" {
-		b.WriteString(styles.DangerStyle.Render("  " + m.err))
+		b.WriteString("\n")
+		b.WriteString("  " + styles.DangerStyle.Render("! "+m.err))
 		b.WriteString("\n")
 	}
 
-	b.WriteString(styles.HelpStyle.Render("  tab/shift+tab: navigate  ctrl+s/enter(last): save  esc: cancel"))
+	return b.String()
+}
+
+func (m *CredentialFormModel) renderField(idx int, meta fieldMeta) string {
+	var b strings.Builder
+
+	// Label row with hint
+	label := styles.LabelStyle.Render("  " + meta.label)
+	hint := styles.HintStyle.Render(" (" + meta.hint + ")")
+	b.WriteString(label + hint + "\n")
+
+	// Description
+	b.WriteString(styles.MutedStyle.Render("  "+meta.desc) + "\n")
+
+	// Input with border that changes on focus
+	inputView := m.inputs[idx].View()
+	if idx == m.focused {
+		b.WriteString(styles.InputGroupFocusedStyle.Render("  " + inputView))
+	} else {
+		b.WriteString(styles.InputGroupStyle.Render("  " + inputView))
+	}
 	b.WriteString("\n")
 
 	return b.String()

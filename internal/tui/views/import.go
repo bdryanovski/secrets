@@ -10,13 +10,14 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ImportModel handles importing from external password managers.
 type ImportModel struct {
 	db     *database.DB
 	input  textinput.Model
-	source int // 0 = bitwarden, 1 = apple
+	source int
 	result *importer.ImportResult
 	err    string
 	done   bool
@@ -27,9 +28,12 @@ type ImportModel struct {
 // NewImportModel creates an import view.
 func NewImportModel(db *database.DB) *ImportModel {
 	ti := textinput.New()
-	ti.Placeholder = "Path to export file..."
+	ti.Placeholder = "/path/to/export-file.csv"
 	ti.Focus()
-	ti.Width = 50
+	ti.Width = 46
+	ti.PromptStyle = lipgloss.NewStyle().Foreground(styles.Primary)
+	ti.TextStyle = lipgloss.NewStyle().Foreground(styles.Text)
+	ti.PlaceholderStyle = lipgloss.NewStyle().Foreground(styles.Muted)
 
 	return &ImportModel{
 		db:    db,
@@ -104,7 +108,6 @@ func (m *ImportModel) runImport() tea.Cmd {
 		} else {
 			imp = &importer.AppleImporter{}
 		}
-
 		result, err := imp.Import(filePath)
 		return importResultMsg{result: result, err: err}
 	}
@@ -118,7 +121,7 @@ func (m *ImportModel) saveImported() tea.Cmd {
 	return func() tea.Msg {
 		count := 0
 		for _, c := range creds {
-			cred := c // copy for closure
+			cred := c
 			if err := db.CreateCredential(&cred); err != nil {
 				return importSavedMsg{count: count, err: err}
 			}
@@ -132,50 +135,108 @@ func (m *ImportModel) View() string {
 	var b strings.Builder
 
 	b.WriteString("\n")
-	b.WriteString(styles.TitleStyle.Render("  Import"))
+	b.WriteString("  " + styles.TitleStyle.Render("Import Credentials"))
+	b.WriteString("\n")
+	b.WriteString("  " + styles.MutedStyle.Render("Import credentials from external password managers"))
 	b.WriteString("\n\n")
 
 	if m.done {
-		b.WriteString(styles.SuccessStyle.Render(fmt.Sprintf("  Successfully imported %d credentials!", m.saved)))
-		b.WriteString("\n\n")
-		b.WriteString(styles.HelpStyle.Render("  esc: back"))
+		b.WriteString(m.viewDone())
 		return b.String()
 	}
 
-	// Source selector
-	b.WriteString(styles.LabelStyle.Render("  Source:"))
+	// Step indicator
+	step := 1
+	if m.result != nil {
+		step = 3
+	}
+	b.WriteString("  " + styles.ProgressDots(step-1, 3))
+	b.WriteString(styles.MutedStyle.Render("  Step " + fmt.Sprintf("%d", step) + " of 3"))
+	b.WriteString("\n\n")
+
+	// Step 1: Source selection
+	b.WriteString(styles.LabelStyle.Render("  Source"))
 	b.WriteString("\n")
-	sources := []string{"Bitwarden (1)", "Apple Passwords (2)"}
-	for i, s := range sources {
+	b.WriteString(styles.MutedStyle.Render("  Choose which password manager you exported from"))
+	b.WriteString("\n\n")
+
+	sources := []struct {
+		name, desc, formats string
+	}{
+		{"Bitwarden", "Open-source password manager", "CSV, JSON"},
+		{"Apple Passwords", "macOS / iOS built-in keychain", "CSV"},
+	}
+	for i, src := range sources {
 		if i == m.source {
-			b.WriteString("  " + styles.SelectedStyle.Render("> "+s))
+			card := styles.HighlightCardStyle.Width(52).Render(
+				styles.SelectedStyle.Render(" > "+src.name) + "\n" +
+					"   " + styles.MutedStyle.Render(src.desc) + "\n" +
+					"   " + styles.HintStyle.Render("Formats: "+src.formats),
+			)
+			b.WriteString(card)
 		} else {
-			b.WriteString("  " + styles.MutedStyle.Render("  "+s))
+			card := styles.CardStyle.Width(52).Render(
+				styles.DimStyle.Render("   "+src.name) + "\n" +
+					"   " + styles.MutedStyle.Render(src.desc),
+			)
+			b.WriteString(card)
 		}
 		b.WriteString("\n")
 	}
+
+	// Step 2: File path
+	b.WriteString("\n")
+	b.WriteString(styles.LabelStyle.Render("  File Path"))
+	b.WriteString("\n")
+	b.WriteString(styles.MutedStyle.Render("  Path to the exported file on your filesystem"))
+	b.WriteString("\n\n")
+	b.WriteString(styles.InputGroupFocusedStyle.Width(54).Render("  " + m.input.View()))
 	b.WriteString("\n")
 
-	b.WriteString(styles.LabelStyle.Render("  File path:"))
-	b.WriteString("\n  ")
-	b.WriteString(m.input.View())
+	if m.err != "" {
+		b.WriteString("\n")
+		b.WriteString("  " + styles.DangerStyle.Render("! "+m.err))
+		b.WriteString("\n")
+	}
+
+	// Step 3: Review (if parsed)
+	if m.result != nil {
+		b.WriteString("\n")
+		b.WriteString(m.viewReview())
+	}
+
+	return b.String()
+}
+
+func (m *ImportModel) viewReview() string {
+	var b strings.Builder
+
+	b.WriteString(styles.LabelStyle.Render("  Review"))
 	b.WriteString("\n\n")
 
-	if m.err != "" {
-		b.WriteString(styles.DangerStyle.Render("  " + m.err))
-		b.WriteString("\n\n")
-	}
-
-	if m.result != nil {
-		b.WriteString(styles.SuccessStyle.Render(fmt.Sprintf("  Parsed: %d items (%d skipped)", m.result.Total, m.result.Skipped)))
-		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("  Ready to import %d credentials", len(m.result.Credentials)))
-		b.WriteString("\n\n")
-		b.WriteString(styles.HelpStyle.Render("  enter: save all  esc: cancel"))
-	} else {
-		b.WriteString(styles.HelpStyle.Render("  1/2: select source  enter: import  esc: back"))
-	}
+	stats := fmt.Sprintf("  Total: %d   Ready: %d   Skipped: %d",
+		m.result.Total,
+		len(m.result.Credentials),
+		m.result.Skipped,
+	)
+	b.WriteString(styles.SuccessCardStyle.Width(54).Render(
+		styles.SuccessStyle.Render("  Parsed successfully!") + "\n" +
+			styles.NormalStyle.Render(stats) + "\n\n" +
+			"  Press " + styles.KeyStyle.Render("enter") + " to import all credentials",
+	))
 	b.WriteString("\n")
 
 	return b.String()
+}
+
+func (m *ImportModel) viewDone() string {
+	content := lipgloss.JoinVertical(lipgloss.Center,
+		"",
+		styles.SuccessStyle.Render(fmt.Sprintf("  Successfully imported %d credentials!", m.saved)),
+		"",
+		styles.MutedStyle.Render("  Your imported credentials are now encrypted and stored"),
+		styles.MutedStyle.Render("  in your local vault."),
+		"",
+	)
+	return styles.SuccessCardStyle.Width(56).Render(content)
 }

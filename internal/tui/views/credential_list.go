@@ -9,6 +9,7 @@ import (
 	"github.com/bdryanovski/secrets/internal/tui/styles"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // CredentialListModel displays a list of credentials.
@@ -66,7 +67,9 @@ func (m *CredentialListModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case "home":
 		m.cursor = 0
 	case "end":
-		m.cursor = len(m.items) - 1
+		if len(m.items) > 0 {
+			m.cursor = len(m.items) - 1
+		}
 	}
 	return nil
 }
@@ -83,38 +86,91 @@ func (m *CredentialListModel) View() string {
 	var b strings.Builder
 
 	if m.err != "" {
-		b.WriteString(styles.DangerStyle.Render("  Error: " + m.err))
+		b.WriteString("\n")
+		errCard := styles.DangerCardStyle.Render(
+			styles.DangerStyle.Render("  Error: " + m.err),
+		)
+		b.WriteString(errCard)
 		b.WriteString("\n")
 		return b.String()
 	}
 
 	if len(m.items) == 0 {
-		b.WriteString(styles.MutedStyle.Render("  No credentials stored yet. Press 'a' to add one."))
-		b.WriteString("\n")
+		b.WriteString(m.emptyState())
 		return b.String()
 	}
 
+	// Item count badge
+	b.WriteString("\n")
+	countBadge := styles.Badge(
+		fmt.Sprintf(" %d items ", len(m.items)),
+		styles.BgDark, styles.PrimaryDim,
+	)
+	b.WriteString("  " + countBadge)
+	b.WriteString("\n\n")
+
+	// Table header
+	header := fmt.Sprintf("  %-3s %-28s %-24s %s", "#", "NAME", "USERNAME", "URL")
+	b.WriteString(styles.MutedStyle.Render(header))
+	b.WriteString("\n")
+	b.WriteString("  " + styles.Divider(70))
+	b.WriteString("\n")
+
+	// Rows
 	for i, cred := range m.items {
-		cursor := "  "
-		if i == m.cursor {
-			cursor = styles.SelectedStyle.Render("> ")
-		}
-
-		name := cred.Name
-		user := cred.Username
-		if len(name) > 30 {
-			name = name[:27] + "..."
-		}
-
-		line := fmt.Sprintf("%-32s %s", name, styles.MutedStyle.Render(user))
-
-		if i == m.cursor {
-			b.WriteString(cursor + styles.SelectedStyle.Render(line))
-		} else {
-			b.WriteString(cursor + styles.NormalStyle.Render(line))
-		}
+		b.WriteString(m.renderRow(i, cred))
 		b.WriteString("\n")
 	}
 
 	return b.String()
+}
+
+func (m *CredentialListModel) renderRow(idx int, cred models.Credential) string {
+	name := truncate(cred.Name, 26)
+	user := truncate(cred.Username, 22)
+	url := truncate(cred.URL, 20)
+	num := fmt.Sprintf("%-3d", idx+1)
+
+	if idx == m.cursor {
+		row := fmt.Sprintf("%-3s %-28s %-24s %s", num, name, user, url)
+		return styles.SelectedRowStyle.Render(
+			styles.SelectedStyle.Render("> ") + row,
+		)
+	}
+
+	return fmt.Sprintf("  %s %-28s %s %s",
+		styles.MutedStyle.Render(num),
+		styles.NormalStyle.Render(name),
+		styles.DimStyle.Render(user),
+		styles.MutedStyle.Render(url),
+	)
+}
+
+func (m *CredentialListModel) emptyState() string {
+	art := lipgloss.NewStyle().Foreground(styles.Subtle).Render(`
+       ___
+      |   |
+      |   |
+      |___|
+     /     \
+    / () () \
+   |   __   |
+    \_______/
+`)
+
+	content := lipgloss.JoinVertical(lipgloss.Center,
+		art,
+		styles.MutedStyle.Render("No credentials stored yet"),
+		"",
+		styles.DimStyle.Render("Press ")+styles.KeyStyle.Render("a")+styles.DimStyle.Render(" to add your first credential"),
+		styles.DimStyle.Render("or ")+styles.KeyStyle.Render("i")+styles.DimStyle.Render(" to import from Bitwarden / Apple"),
+	)
+	return "\n" + content + "\n"
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) > maxLen {
+		return s[:maxLen-3] + "..."
+	}
+	return s
 }
