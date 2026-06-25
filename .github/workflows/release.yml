@@ -70,35 +70,7 @@ jobs:
           name: secrets-linux-amd64
           path: secrets-linux-amd64
 
-  build-darwin-amd64:
-    needs: version
-    runs-on: macos-13
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
-
-      - name: Build
-        env:
-          CGO_ENABLED: 1
-        run: |
-          VERSION_PKG="github.com/bdryanovski/secrets/internal/version"
-          LDFLAGS="-X ${VERSION_PKG}.Version=${{ needs.version.outputs.version }} \
-                   -X ${VERSION_PKG}.GitCommit=${{ needs.version.outputs.commit }} \
-                   -X ${VERSION_PKG}.BuildDate=$(date -u '+%Y-%m-%d_%H:%M:%S')"
-          go build -ldflags "${LDFLAGS}" -o secrets-darwin-amd64 ./cmd/secrets
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: secrets-darwin-amd64
-          path: secrets-darwin-amd64
-
-  build-darwin-arm64:
+  build-darwin:
     needs: version
     runs-on: macos-14
     steps:
@@ -110,7 +82,7 @@ jobs:
         with:
           go-version: '1.23'
 
-      - name: Build
+      - name: Build arm64 (native)
         env:
           CGO_ENABLED: 1
         run: |
@@ -120,14 +92,32 @@ jobs:
                    -X ${VERSION_PKG}.BuildDate=$(date -u '+%Y-%m-%d_%H:%M:%S')"
           go build -ldflags "${LDFLAGS}" -o secrets-darwin-arm64 ./cmd/secrets
 
-      - name: Upload artifact
+      - name: Build amd64 (cross-compile)
+        env:
+          CGO_ENABLED: 1
+          GOOS: darwin
+          GOARCH: amd64
+        run: |
+          VERSION_PKG="github.com/bdryanovski/secrets/internal/version"
+          LDFLAGS="-X ${VERSION_PKG}.Version=${{ needs.version.outputs.version }} \
+                   -X ${VERSION_PKG}.GitCommit=${{ needs.version.outputs.commit }} \
+                   -X ${VERSION_PKG}.BuildDate=$(date -u '+%Y-%m-%d_%H:%M:%S')"
+          go build -ldflags "${LDFLAGS}" -o secrets-darwin-amd64 ./cmd/secrets
+
+      - name: Upload arm64 artifact
         uses: actions/upload-artifact@v4
         with:
           name: secrets-darwin-arm64
           path: secrets-darwin-arm64
 
+      - name: Upload amd64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: secrets-darwin-amd64
+          path: secrets-darwin-amd64
+
   release:
-    needs: [version, build-linux, build-darwin-amd64, build-darwin-arm64]
+    needs: [version, build-linux, build-darwin]
     runs-on: ubuntu-latest
 
     steps:
