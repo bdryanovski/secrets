@@ -439,6 +439,36 @@ func (db *DB) SearchEnvSecrets(query string) ([]models.EnvSecret, error) {
 	return secrets, rows.Err()
 }
 
+// --- Security Analysis ---
+
+// ListCredentialsDecrypted returns all credentials with decrypted passwords.
+func (db *DB) ListCredentialsDecrypted() ([]models.Credential, error) {
+	rows, err := db.conn.Query(
+		`SELECT id, name, url, username, password, notes, meta, created_at, updated_at
+		 FROM credentials ORDER BY name ASC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list credentials: %w", err)
+	}
+	defer rows.Close()
+
+	var creds []models.Credential
+	for rows.Next() {
+		var c models.Credential
+		var encPassword, metaStr string
+		if err := rows.Scan(&c.ID, &c.Name, &c.URL, &c.Username, &encPassword, &c.Notes, &metaStr, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		c.Password, err = crypto.Decrypt(encPassword, db.encKey)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt password for %s: %w", c.Name, err)
+		}
+		c.Meta = decodeMeta(metaStr)
+		creds = append(creds, c)
+	}
+	return creds, rows.Err()
+}
+
 // --- Purge ---
 
 // PurgeAll deletes all credentials and env secrets from the vault.

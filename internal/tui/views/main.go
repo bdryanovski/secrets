@@ -30,6 +30,7 @@ const (
 	ViewSearch
 	ViewImport
 	ViewGeneratePassword
+	ViewSecurity
 )
 
 // MainModel is the primary TUI model after unlock.
@@ -39,8 +40,9 @@ type MainModel struct {
 	width  int
 	height int
 
-	activeTab int
-	viewMode  ViewMode
+	activeTab    int
+	viewMode     ViewMode
+	returnToView ViewMode // view to return to after edit/detail (0 = ViewList)
 
 	// Sub-views
 	credList   *CredentialListModel
@@ -51,6 +53,7 @@ type MainModel struct {
 	search     *SearchModel
 	importView *ImportModel
 	passGen    *PasswordGenModel
+	security   *SecurityModel
 
 	statusMsg  string
 	statusType string // "success", "error", "info"
@@ -95,9 +98,19 @@ func (m *MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case backToListMsg:
-		m.viewMode = ViewList
 		m.statusMsg = string(msg)
 		m.statusType = "success"
+
+		// Return to the view that initiated the edit.
+		if m.returnToView == ViewSecurity && m.security != nil {
+			m.viewMode = ViewSecurity
+			m.returnToView = ViewList
+			// Refresh the analysis data after the edit.
+			return m, m.security.Init()
+		}
+
+		m.viewMode = ViewList
+		m.returnToView = ViewList
 		var cmd tea.Cmd
 		if m.activeTab == TabCredentials {
 			cmd = m.credList.loadCredentials()
@@ -105,6 +118,9 @@ func (m *MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd = m.envList.loadEnvSecrets()
 		}
 		return m, cmd
+
+	case securityEditMsg:
+		return m.handleSecurityEdit(msg.credID)
 
 	case tea.KeyMsg:
 		// Global keys
@@ -135,6 +151,8 @@ func (m *MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleImportKeys(msg)
 		case ViewGeneratePassword:
 			return m.handlePassGenKeys(msg)
+		case ViewSecurity:
+			return m.handleSecurityKeys(msg)
 		}
 	}
 
@@ -190,6 +208,10 @@ func (m *MainModel) handleListKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewMode = ViewGeneratePassword
 		m.passGen = NewPasswordGenModel(m.cfg)
 		return m, m.passGen.Init()
+	case "s":
+		m.viewMode = ViewSecurity
+		m.security = NewSecurityModel(m.db)
+		return m, m.security.Init()
 	}
 
 	var cmd tea.Cmd
@@ -231,7 +253,13 @@ func (m *MainModel) handleDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *MainModel) handleFormKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		m.viewMode = ViewList
+		if m.returnToView == ViewSecurity && m.security != nil {
+			m.viewMode = ViewSecurity
+			m.returnToView = ViewList
+		} else {
+			m.viewMode = ViewList
+			m.returnToView = ViewList
+		}
 		return m, nil
 	case "tab", "shift+tab", "up", "down", "ctrl+s":
 		var cmd tea.Cmd
@@ -343,6 +371,33 @@ func (m *MainModel) handlePassGenKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m *MainModel) handleSecurityKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.viewMode = ViewList
+		return m, nil
+	}
+	var cmd tea.Cmd
+	if m.security != nil {
+		cmd = m.security.handleKey(msg)
+	}
+	return m, cmd
+}
+
+func (m *MainModel) handleSecurityEdit(credID int64) (tea.Model, tea.Cmd) {
+	cred, err := m.db.GetCredential(credID)
+	if err != nil || cred == nil {
+		m.statusMsg = "Failed to load credential for editing"
+		m.statusType = "error"
+		return m, nil
+	}
+	m.returnToView = ViewSecurity
+	m.viewMode = ViewEdit
+	m.activeTab = TabCredentials
+	m.credForm = NewCredentialFormModel(cred, m.db)
+	return m, nil
+}
+
 func (m *MainModel) delegateUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch m.viewMode {
@@ -373,6 +428,10 @@ func (m *MainModel) delegateUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ViewGeneratePassword:
 		if m.passGen != nil {
 			cmd = m.passGen.update(msg)
+		}
+	case ViewSecurity:
+		if m.security != nil {
+			cmd = m.security.update(msg)
 		}
 	}
 	return m, cmd
@@ -415,6 +474,9 @@ func (m *MainModel) View() string {
 	}
 	m.credList.SetSize(contentWidth, listHeight)
 	m.envList.SetSize(contentWidth, listHeight)
+	if m.security != nil {
+		m.security.SetSize(contentWidth, listHeight)
+	}
 
 	// Now render content with the correct size.
 	content := m.renderContent(contentWidth)
@@ -463,6 +525,8 @@ func (m *MainModel) viewModeLabel() string {
 		return "Import"
 	case ViewGeneratePassword:
 		return "Generate"
+	case ViewSecurity:
+		return "Security"
 	}
 	return ""
 }
@@ -513,6 +577,10 @@ func (m *MainModel) renderContent(width int) string {
 		if m.passGen != nil {
 			return m.passGen.View()
 		}
+	case ViewSecurity:
+		if m.security != nil {
+			return m.security.View()
+		}
 	}
 	return ""
 }
@@ -542,6 +610,7 @@ func (m *MainModel) renderFooter() string {
 			styles.KeyHint("d", "delete"),
 			styles.KeyHint("/", "search"),
 			styles.KeyHint("g", "generate"),
+			styles.KeyHint("s", "security"),
 			styles.KeyHint("i", "import"),
 			styles.KeyHint("q", "quit"),
 		)
@@ -584,6 +653,14 @@ func (m *MainModel) renderFooter() string {
 		return styles.HelpBarWrapped(w,
 			styles.KeyHint("1/2", "source"),
 			styles.KeyHint("enter", "import"),
+			styles.KeyHint("esc", "back"),
+		)
+	case ViewSecurity:
+		return styles.HelpBarWrapped(w,
+			styles.KeyHint("1", "overview"),
+			styles.KeyHint("2", "duplicates"),
+			styles.KeyHint("3", "identities"),
+			styles.KeyHint("j/k", "scroll"),
 			styles.KeyHint("esc", "back"),
 		)
 	default:
